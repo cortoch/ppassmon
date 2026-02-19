@@ -1,0 +1,45 @@
+name: Firestore Monitor
+
+on:
+  schedule:
+    # Toutes les 30 minutes
+    - cron: '*/30 * * * *'
+  workflow_dispatch:  # Permet de lancer manuellement
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Restore cache (état précédent)
+        uses: actions/cache@v4
+        with:
+          path: firestore_state.json
+          key: firestore-state-${{ github.run_id }}
+          restore-keys: |
+            firestore-state-
+
+      - name: Run monitor
+        env:
+          FIREBASE_REFRESH_TOKEN: ${{ secrets.FIREBASE_REFRESH_TOKEN }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+        run: python firestore_monitor.py
+
+      - name: Save cache (nouvel état)
+        uses: actions/cache@v4
+        with:
+          path: firestore_state.json
+          key: firestore-state-${{ github.run_id }}
