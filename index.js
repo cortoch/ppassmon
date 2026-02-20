@@ -1,15 +1,16 @@
-const puppeteer = require("puppeteer");
+const puppeteer = require("puppeteer-core");
 const nodemailer = require("nodemailer");
 const crypto = require("crypto");
 const fs = require("fs");
 
-// ⚙️ CONFIGURATION — sur GitHub Actions ces valeurs viennent des Secrets
 const PASSPASS_EMAIL = process.env.PASSPASS_EMAIL || "henri.borreill@gmail.com";
-const PASSPASS_PASSWORD = process.env.PASSPASS_PASSWORD || "REMPLACE_PAR_TON_MOT_DE_PASSE";
+const PASSPASS_PASSWORD = process.env.PASSPASS_PASSWORD || "REMPLACE";
 const EMAIL_FROM = process.env.EMAIL_FROM || "henri.borreill@gmail.com";
 const EMAIL_TO = process.env.EMAIL_TO || "henri.borreill@gmail.com";
-const EMAIL_PASSWORD = process.env.EMAIL_PASSWORD || "REMPLACE_PAR_APP_PASSWORD_GMAIL";
+const EMAIL_PASSWORD = process.env.EMAIL_PASSWORD || "REMPLACE";
 const CACHE_FILE = "state.json";
+
+console.log("Email:", PASSPASS_EMAIL, "/ Password length:", PASSPASS_PASSWORD?.length);
 
 function hash(str) { return crypto.createHash("md5").update(str).digest("hex"); }
 function loadState() {
@@ -63,15 +64,20 @@ async function login(page) {
     const btn = document.querySelector('button[type="submit"]') || document.querySelector('button');
     if (btn) btn.click();
   });
-  await new Promise(r => setTimeout(r, 6000));
+  await new Promise(r => setTimeout(r, 8000));
+  console.log("URL après login:", page.url());
   if (page.url().includes("login")) throw new Error("Connexion échouée");
 }
 
 async function scrapePasspass() {
   console.log(`🔍 Vérification - ${new Date().toLocaleString("fr-FR")}`);
 
+  // Utilise le Chrome système installé par apt-get
+  const executablePath = "/usr/bin/google-chrome-stable";
+
   const browser = await puppeteer.launch({
-    headless: false,  // Nécessite Xvfb sur Linux
+    executablePath,
+    headless: false,
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
@@ -82,12 +88,10 @@ async function scrapePasspass() {
 
   try {
     const page = await browser.newPage();
-
     console.log("🔐 Connexion...");
     await login(page);
     console.log("✅ Connecté !");
 
-    // Clique sur la propriété depuis global-view
     await page.evaluate(() => {
       const els = Array.from(document.querySelectorAll("*"));
       const el = els.find(e => e.innerText?.trim().includes("Le jardin d'Henri") && e.children.length === 0);
