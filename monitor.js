@@ -3,6 +3,7 @@ const { getAuth, signInWithEmailAndPassword } = require("firebase/auth");
 const { getFirestore, collection, getDocs } = require("firebase/firestore");
 const crypto = require("crypto");
 const nodemailer = require("nodemailer");
+const fs = require("fs");
 
 const firebaseConfig = {
   apiKey: "AIzaSyCffkmTqLa241aKYMg6l_neYrU8vT3RG38",
@@ -15,8 +16,7 @@ const PASSPASS_PASSWORD = process.env.PASSPASS_PASSWORD;
 const EMAIL_FROM = process.env.EMAIL_FROM;
 const EMAIL_TO = process.env.EMAIL_TO;
 const EMAIL_PASSWORD = process.env.EMAIL_PASSWORD;
-
-const SUBCOLLECTIONS = ["clients", "bookings", "waitingBookings", "disabledBookings", "billings", "propreties"];
+const CACHE_FILE = "firestore_state.json";
 
 function hash(data) {
   return crypto.createHash("md5").update(JSON.stringify(data)).digest("hex");
@@ -42,6 +42,33 @@ async function sendEmail(changes) {
   console.log(`✅ Email envoyé à ${EMAIL_TO}`);
 }
 
+async function fetchAndTrack(db, path, label, previousState, currentState, changes) {
+  try {
+    const ref = collection(db, ...path);
+    const snapshot = await getDocs(ref);
+    const docs = {};
+    snapshot.forEach((doc) => { docs[doc.id] = doc.data(); });
+
+    const docCount = Object.keys(docs).length;
+    const currentHash = hash(docs);
+    currentState[label] = { hash: currentHash, count: docCount };
+    console.log(`📁 ${label}: ${docCount} documents`);
+
+    if (label in previousState) {
+      if (previousState[label].hash !== currentHash) {
+        changes.push(`<b>${label}</b> modifiée (${previousState[label].count} → ${docCount} documents)`);
+        console.log(`🔄 CHANGEMENT dans '${label}'!`);
+      }
+    } else {
+      console.log(`🆕 Première observation: ${label}`);
+    }
+    return docs;
+  } catch (e) {
+    console.log(`⛔ ${label}: ${e.message}`);
+    return null;
+  }
+}
+
 async function main() {
   console.log(`🔍 Démarrage - ${new Date().toLocaleString("fr-FR")}`);
 
@@ -53,43 +80,37 @@ async function main() {
   const uid = userCredential.user.uid;
   console.log(`✅ Connecté - UID: ${uid}`);
 
-  // Charger l'état précédent
-  const fs = require("fs");
-  const CACHE_FILE = "firestore_state.json";
   const previousState = fs.existsSync(CACHE_FILE) ? JSON.parse(fs.readFileSync(CACHE_FILE, "utf8")) : {};
   const currentState = {};
   const changes = [];
 
-  for (const sub of SUBCOLLECTIONS) {
-    try {
-      // Chemin correct : user/{uid}/{subcollection}
-      const ref = collection(db, "user", uid, sub);
-      const snapshot = await getDocs(ref);
-      const docs = {};
-      snapshot.forEach((doc) => { docs[doc.id] = doc.data(); });
+  // 1. Propriétés de l'utilisateur : user/{uid}/propreties
+  const propreties = await fetchAndTrack(db, ["user", uid, "propreties"], "propreties", previousState, currentState, changes);
 
-      const docCount = Object.keys(docs).length;
-      const currentHash = hash(docs);
-      currentState[sub] = { hash: currentHash, count: docCount };
-      console.log(`📁 ${sub}: ${docCount} documents`);
+  // 2. Clients de l'utilisateur : user/{uid}/clients
+  await fetchAndTrack(db, ["user", uid, "clients"], "clients", previousState, currentState, changes);
 
-      if (sub in previousState) {
-        if (previousState[sub].hash !== currentHash) {
-          changes.push(`<b>${sub}</b> modifiée (${previousState[sub].count} → ${docCount} documents)`);
-          console.log(`🔄 CHANGEMENT dans '${sub}'!`);
-        }
-      } else {
-        console.log(`🆕 Première observation: ${sub}`);
+  // 3. Pour chaque propriété, lire bookings / disabledBookings / waitingBookings / billings
+  if (propreties) {
+    for (const propId of Object.keys(propreties)) {
+      console.log(`\n🏠 Propriété: ${propId}`);
+      for (const sub of ["bookings", "disabledBookings", "waitingBookings", "billings"]) {
+        await fetchAndTrack(
+          db,
+          ["propreties", propId, sub],
+          `${propId}/${sub}`,
+          previousState,
+          currentState,
+          changes
+        );
       }
-    } catch (e) {
-      console.log(`⛔ ${sub}: ${e.message}`);
     }
   }
 
   if (changes.length > 0) {
     await sendEmail(changes);
   } else {
-    console.log("✅ Aucun changement");
+    console.log("\n✅ Aucun changement");
   }
 
   fs.writeFileSync(CACHE_FILE, JSON.stringify(currentState, null, 2));
