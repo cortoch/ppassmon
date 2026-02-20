@@ -1,6 +1,6 @@
 const { initializeApp } = require("firebase/app");
 const { getAuth, signInWithEmailAndPassword } = require("firebase/auth");
-const { getFirestore, collection, getDocs } = require("firebase/firestore");
+const { getFirestore, collection, getDocs, query, where } = require("firebase/firestore");
 const crypto = require("crypto");
 const nodemailer = require("nodemailer");
 const fs = require("fs");
@@ -80,29 +80,36 @@ async function main() {
   const uid = userCredential.user.uid;
   console.log(`✅ Connecté - UID: ${uid}`);
 
-  const previousState = fs.existsSync(CACHE_FILE) ? JSON.parse(fs.readFileSync(CACHE_FILE, "utf8")) : {};
+  const previousState = fs.existsSync(CACHE_FILE)
+    ? JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"))
+    : {};
   const currentState = {};
   const changes = [];
 
-  // 1. Propriétés de l'utilisateur : user/{uid}/propreties
-  const propreties = await fetchAndTrack(db, ["user", uid, "propreties"], "propreties", previousState, currentState, changes);
+  // 1. Propriétés dont tu es propriétaire : user/{uid}/propreties
+  console.log("\n👤 Propriétés (propriétaire) :");
+  const ownedProps = await fetchAndTrack(db, ["user", uid, "propreties"], "owned/propreties", previousState, currentState, changes);
 
-  // 2. Clients de l'utilisateur : user/{uid}/clients
-  await fetchAndTrack(db, ["user", uid, "clients"], "clients", previousState, currentState, changes);
+  // 2. Propriétés dont tu es client : clients/{uid}/propreties
+  console.log("\n🏠 Propriétés (client) :");
+  const clientProps = await fetchAndTrack(db, ["clients", uid, "propreties"], "client/propreties", previousState, currentState, changes);
 
-  // 3. Pour chaque propriété, lire bookings / disabledBookings / waitingBookings / billings
-  if (propreties) {
-    for (const propId of Object.keys(propreties)) {
-      console.log(`\n🏠 Propriété: ${propId}`);
+  // 3. Sous-collections des propriétés dont tu es propriétaire
+  if (ownedProps && Object.keys(ownedProps).length > 0) {
+    console.log("\n📋 Sous-collections propriétaire :");
+    for (const propId of Object.keys(ownedProps)) {
       for (const sub of ["bookings", "disabledBookings", "waitingBookings", "billings"]) {
-        await fetchAndTrack(
-          db,
-          ["propreties", propId, sub],
-          `${propId}/${sub}`,
-          previousState,
-          currentState,
-          changes
-        );
+        await fetchAndTrack(db, ["user", uid, "propreties", propId, sub], `owned/${propId}/${sub}`, previousState, currentState, changes);
+      }
+    }
+  }
+
+  // 4. Sous-collections des propriétés dont tu es client
+  if (clientProps && Object.keys(clientProps).length > 0) {
+    console.log("\n📋 Sous-collections client :");
+    for (const propId of Object.keys(clientProps)) {
+      for (const sub of ["bookings", "disabledBookings", "waitingBookings", "billings"]) {
+        await fetchAndTrack(db, ["clients", uid, "propreties", propId, sub], `client/${propId}/${sub}`, previousState, currentState, changes);
       }
     }
   }
