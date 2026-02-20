@@ -4,11 +4,11 @@ const crypto = require("crypto");
 const fs = require("fs");
 
 // ⚙️ CONFIGURATION — sur GitHub Actions ces valeurs viennent des Secrets
-const PASSPASS_EMAIL = process.env.PASSPASS_EMAIL || "henri.borreill@gmail.com";
-const PASSPASS_PASSWORD = process.env.PASSPASS_PASSWORD || "REMPLACE_PAR_TON_MOT_DE_PASSE";
-const EMAIL_FROM = process.env.EMAIL_FROM || "henri.borreill@gmail.com";
-const EMAIL_TO = process.env.EMAIL_TO || "henri.borreill@gmail.com";
-const EMAIL_PASSWORD = process.env.EMAIL_PASSWORD || "REMPLACE_PAR_APP_PASSWORD_GMAIL";
+const PASSPASS_EMAIL = "henri.borreill@gmail.com";
+const PASSPASS_PASSWORD = "Charles66!!!";
+const EMAIL_FROM = "henri.borreill@gmail.com";
+const EMAIL_TO = "henri.borreill@gmail.com";
+const EMAIL_PASSWORD = "nhgd sqan wkhh xhcr";
 const CACHE_FILE = "state.json";
 
 function hash(str) { return crypto.createHash("md5").update(str).digest("hex"); }
