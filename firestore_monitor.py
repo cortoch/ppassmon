@@ -26,7 +26,7 @@ EMAIL_TO = os.environ.get("EMAIL_TO", "henri.borreill@gmail.com")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD", "")  # App password Gmail
 
 # Collections à surveiller
-COLLECTIONS = ["clients", "reservations", "menages", "menage", "reservation", "client"]
+COLLECTIONS = ["clients", "user", "propreties", "bookings", "disabledBookings", "waitingBookings", "billings"]
 
 # Fichier de cache pour stocker l'état précédent
 CACHE_FILE = "firestore_state.json"
