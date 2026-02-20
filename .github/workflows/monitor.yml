@@ -2,7 +2,7 @@ name: Passpass Monitor
 
 on:
   schedule:
-    - cron: '*/30 * * * *'  # Toutes les 30 minutes
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -18,16 +18,25 @@ jobs:
         with:
           node-version: '18'
 
-      - name: Install system dependencies (Chrome + Xvfb)
+      - name: Install Xvfb
+        run: sudo apt-get install -y xvfb
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        id: cache-npm
+        with:
+          path: |
+            node_modules
+            ~/.cache/puppeteer
+          key: node-puppeteer-${{ hashFiles('package.json') }}
+
+      - name: Install dependencies
+        if: steps.cache-npm.outputs.cache-hit != 'true'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb
+          npm install
           npx puppeteer browsers install chrome
 
-      - name: Install Node dependencies
-        run: npm install
-
-      - name: Restore state cache
+      - name: Restore state
         uses: actions/cache@v4
         with:
           path: state.json
@@ -35,7 +44,7 @@ jobs:
           restore-keys: |
             passpass-state-
 
-      - name: Run monitor with virtual display
+      - name: Run monitor
         env:
           PASSPASS_EMAIL: ${{ secrets.PASSPASS_EMAIL }}
           PASSPASS_PASSWORD: ${{ secrets.PASSPASS_PASSWORD }}
@@ -48,7 +57,7 @@ jobs:
           sleep 2
           node index.js
 
-      - name: Save state cache
+      - name: Save state
         if: always()
         uses: actions/cache@v4
         with:
