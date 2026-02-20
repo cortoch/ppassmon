@@ -1,6 +1,6 @@
 const { initializeApp } = require("firebase/app");
 const { getAuth, signInWithEmailAndPassword } = require("firebase/auth");
-const { getFirestore, collection, getDocs } = require("firebase/firestore");
+const { getFirestore, collection, getDocs, query, where } = require("firebase/firestore");
 const crypto = require("crypto");
 const fs = require("fs");
 const nodemailer = require("nodemailer");
@@ -17,7 +17,15 @@ const EMAIL_PASSWORD = process.env.EMAIL_PASSWORD;
 const PASSPASS_EMAIL = process.env.PASSPASS_EMAIL;
 const PASSPASS_PASSWORD = process.env.PASSPASS_PASSWORD;
 
-const COLLECTIONS = ["clients", "bookings", "waitingBookings", "disabledBookings", "billings"];
+const COLLECTIONS = [
+  { name: "clients",          filter: null },
+  { name: "bookings",         filter: "client" },
+  { name: "waitingBookings",  filter: "client" },
+  { name: "disabledBookings", filter: "client" },
+  { name: "billings",         filter: "client" },
+  { name: "propreties",       filter: "user" },
+];
+
 const CACHE_FILE = "firestore_state.json";
 
 function hash(data) {
@@ -64,10 +72,10 @@ async function main() {
   const auth = getAuth(app);
   const db = getFirestore(app);
 
-  // Connexion avec email/password
   console.log(`🔐 Connexion Firebase avec ${PASSPASS_EMAIL}...`);
-  await signInWithEmailAndPassword(auth, PASSPASS_EMAIL, PASSPASS_PASSWORD);
-  console.log("✅ Connecté !");
+  const userCredential = await signInWithEmailAndPassword(auth, PASSPASS_EMAIL, PASSPASS_PASSWORD);
+  const uid = userCredential.user.uid;
+  console.log(`✅ Connecté ! UID: ${uid}`);
 
   const previousState = loadState();
   const currentState = {};
@@ -75,7 +83,14 @@ async function main() {
 
   for (const col of COLLECTIONS) {
     try {
-      const snapshot = await getDocs(collection(db, col));
+      let q;
+      if (col.filter) {
+        q = query(collection(db, col.name), where(col.filter, "==", uid));
+      } else {
+        q = query(collection(db, col.name));
+      }
+
+      const snapshot = await getDocs(q);
       const docs = {};
       snapshot.forEach((doc) => {
         docs[doc.id] = doc.data();
@@ -83,20 +98,20 @@ async function main() {
 
       const docCount = Object.keys(docs).length;
       const currentHash = hash(docs);
-      currentState[col] = { hash: currentHash, count: docCount };
+      currentState[col.name] = { hash: currentHash, count: docCount };
 
-      console.log(`📁 Collection '${col}': ${docCount} documents`);
+      console.log(`📁 Collection '${col.name}': ${docCount} documents`);
 
-      if (col in previousState) {
-        if (previousState[col].hash !== currentHash) {
-          changes.push(`<b>${col}</b> modifiée (${previousState[col].count} → ${docCount} documents)`);
-          console.log(`🔄 CHANGEMENT dans '${col}'!`);
+      if (col.name in previousState) {
+        if (previousState[col.name].hash !== currentHash) {
+          changes.push(`<b>${col.name}</b> modifiée (${previousState[col.name].count} → ${docCount} documents)`);
+          console.log(`🔄 CHANGEMENT dans '${col.name}'!`);
         }
       } else {
-        console.log(`🆕 Première observation de '${col}'`);
+        console.log(`🆕 Première observation de '${col.name}'`);
       }
     } catch (e) {
-      console.log(`⛔ Erreur sur '${col}': ${e.message}`);
+      console.log(`⛔ Erreur sur '${col.name}': ${e.message}`);
     }
   }
 
