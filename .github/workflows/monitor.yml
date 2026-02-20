@@ -2,9 +2,8 @@ name: Firestore Monitor
 
 on:
   schedule:
-    # Toutes les 30 minutes
     - cron: '*/30 * * * *'
-  workflow_dispatch:  # Permet de lancer manuellement
+  workflow_dispatch:
 
 jobs:
   monitor:
@@ -14,13 +13,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          python-version: '3.11'
+          node-version: '18'
 
       - name: Install dependencies
-        run: pip install requests
+        run: npm install
 
       - name: Restore cache (état précédent)
         uses: actions/cache@v4
@@ -32,13 +31,14 @@ jobs:
 
       - name: Run monitor
         env:
-          FIREBASE_REFRESH_TOKEN: ${{ secrets.FIREBASE_REFRESH_TOKEN }}
+          PASSPASS_EMAIL: ${{ secrets.PASSPASS_EMAIL }}
+          PASSPASS_PASSWORD: ${{ secrets.PASSPASS_PASSWORD }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-        run: python firestore_monitor.py
+        run: node monitor.js
 
-      - name: Save cache (nouvel état)
+      - name: Save cache
         uses: actions/cache@v4
         with:
           path: firestore_state.json
