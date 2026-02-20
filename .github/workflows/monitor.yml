@@ -1,8 +1,8 @@
-name: Firestore Monitor
+name: Passpass Monitor
 
 on:
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '*/30 * * * *'  # Toutes les 30 minutes
   workflow_dispatch:
 
 jobs:
@@ -18,28 +18,39 @@ jobs:
         with:
           node-version: '18'
 
-      - name: Install dependencies
+      - name: Install system dependencies (Chrome + Xvfb)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          npx puppeteer browsers install chrome
+
+      - name: Install Node dependencies
         run: npm install
 
-      - name: Restore cache (état précédent)
+      - name: Restore state cache
         uses: actions/cache@v4
         with:
-          path: firestore_state.json
-          key: firestore-state-${{ github.run_id }}
+          path: state.json
+          key: passpass-state-${{ github.run_id }}
           restore-keys: |
-            firestore-state-
+            passpass-state-
 
-      - name: Run monitor
+      - name: Run monitor with virtual display
         env:
           PASSPASS_EMAIL: ${{ secrets.PASSPASS_EMAIL }}
           PASSPASS_PASSWORD: ${{ secrets.PASSPASS_PASSWORD }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-        run: node monitor.js
+          DISPLAY: ':99'
+        run: |
+          Xvfb :99 -screen 0 1280x800x24 &
+          sleep 2
+          node index.js
 
-      - name: Save cache
+      - name: Save state cache
+        if: always()
         uses: actions/cache@v4
         with:
-          path: firestore_state.json
-          key: firestore-state-${{ github.run_id }}
+          path: state.json
+          key: passpass-state-${{ github.run_id }}
