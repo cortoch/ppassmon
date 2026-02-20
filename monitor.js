@@ -1,6 +1,6 @@
 const { initializeApp } = require("firebase/app");
 const { getAuth, signInWithEmailAndPassword } = require("firebase/auth");
-const { getFirestore, collection, getDocs, query, where } = require("firebase/firestore");
+const { getFirestore, collectionGroup, collection, getDocs, query, where } = require("firebase/firestore");
 const crypto = require("crypto");
 const nodemailer = require("nodemailer");
 const fs = require("fs");
@@ -42,31 +42,24 @@ async function sendEmail(changes) {
   console.log(`✅ Email envoyé à ${EMAIL_TO}`);
 }
 
-async function fetchAndTrack(db, path, label, previousState, currentState, changes) {
-  try {
-    const ref = collection(db, ...path);
-    const snapshot = await getDocs(ref);
-    const docs = {};
-    snapshot.forEach((doc) => { docs[doc.id] = doc.data(); });
+async function trackCollection(snapshot, label, previousState, currentState, changes) {
+  const docs = {};
+  snapshot.forEach((doc) => { docs[doc.id] = doc.data(); });
 
-    const docCount = Object.keys(docs).length;
-    const currentHash = hash(docs);
-    currentState[label] = { hash: currentHash, count: docCount };
-    console.log(`📁 ${label}: ${docCount} documents`);
+  const docCount = Object.keys(docs).length;
+  const currentHash = hash(docs);
+  currentState[label] = { hash: currentHash, count: docCount };
+  console.log(`📁 ${label}: ${docCount} documents`);
 
-    if (label in previousState) {
-      if (previousState[label].hash !== currentHash) {
-        changes.push(`<b>${label}</b> modifiée (${previousState[label].count} → ${docCount} documents)`);
-        console.log(`🔄 CHANGEMENT dans '${label}'!`);
-      }
-    } else {
-      console.log(`🆕 Première observation: ${label}`);
+  if (label in previousState) {
+    if (previousState[label].hash !== currentHash) {
+      changes.push(`<b>${label}</b> modifiée (${previousState[label].count} → ${docCount} documents)`);
+      console.log(`🔄 CHANGEMENT dans '${label}'!`);
     }
-    return docs;
-  } catch (e) {
-    console.log(`⛔ ${label}: ${e.message}`);
-    return null;
+  } else {
+    console.log(`🆕 Première observation: ${label}`);
   }
+  return docs;
 }
 
 async function main() {
@@ -86,32 +79,36 @@ async function main() {
   const currentState = {};
   const changes = [];
 
-  // 1. Propriétés dont tu es propriétaire : user/{uid}/propreties
-  console.log("\n👤 Propriétés (propriétaire) :");
-  const ownedProps = await fetchAndTrack(db, ["user", uid, "propreties"], "owned/propreties", previousState, currentState, changes);
+  // 1. Toutes les propriétés où tu es client (collectionGroup)
+  console.log("\n🏠 Recherche des propriétés...");
+  try {
+    const q = query(collectionGroup(db, "propreties"), where("client", "==", uid));
+    const snapshot = await getDocs(q);
+    const propreties = await trackCollection(snapshot, "propreties", previousState, currentState, changes);
 
-  // 2. Propriétés dont tu es client : clients/{uid}/propreties
-  console.log("\n🏠 Propriétés (client) :");
-  const clientProps = await fetchAndTrack(db, ["clients", uid, "propreties"], "client/propreties", previousState, currentState, changes);
+    // 2. Pour chaque propriété trouvée, lire les sous-collections
+    for (const [propId, propData] of Object.entries(propreties)) {
+      // Reconstruit le chemin parent depuis le ref du document
+      console.log(`\n  🏡 Propriété: ${propData.name || propId}`);
 
-  // 3. Sous-collections des propriétés dont tu es propriétaire
-  if (ownedProps && Object.keys(ownedProps).length > 0) {
-    console.log("\n📋 Sous-collections propriétaire :");
-    for (const propId of Object.keys(ownedProps)) {
+      // Le chemin est user/{ownerId}/propreties/{propId}
+      const propRef = snapshot.docs.find(d => d.id === propId)?.ref;
+      if (!propRef) continue;
+
+      const parentPath = propRef.parent.parent; // = user/{ownerId}
+
       for (const sub of ["bookings", "disabledBookings", "waitingBookings", "billings"]) {
-        await fetchAndTrack(db, ["user", uid, "propreties", propId, sub], `owned/${propId}/${sub}`, previousState, currentState, changes);
+        try {
+          const subRef = collection(db, parentPath.path, "propreties", propId, sub);
+          const subSnap = await getDocs(subRef);
+          await trackCollection(subSnap, `${propId}/${sub}`, previousState, currentState, changes);
+        } catch (e) {
+          console.log(`  ⛔ ${propId}/${sub}: ${e.message}`);
+        }
       }
     }
-  }
-
-  // 4. Sous-collections des propriétés dont tu es client
-  if (clientProps && Object.keys(clientProps).length > 0) {
-    console.log("\n📋 Sous-collections client :");
-    for (const propId of Object.keys(clientProps)) {
-      for (const sub of ["bookings", "disabledBookings", "waitingBookings", "billings"]) {
-        await fetchAndTrack(db, ["clients", uid, "propreties", propId, sub], `client/${propId}/${sub}`, previousState, currentState, changes);
-      }
-    }
+  } catch (e) {
+    console.log(`⛔ collectionGroup propreties: ${e.message}`);
   }
 
   if (changes.length > 0) {
