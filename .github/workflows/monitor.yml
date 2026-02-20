@@ -18,23 +18,21 @@ jobs:
         with:
           node-version: '18'
 
-      - name: Install Xvfb
-        run: sudo apt-get install -y xvfb
+      - name: Install Chrome and Xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb google-chrome-stable
 
       - name: Cache node_modules
         uses: actions/cache@v4
         id: cache-npm
         with:
-          path: |
-            node_modules
-            ~/.cache/puppeteer
-          key: node-puppeteer-${{ hashFiles('package.json') }}
+          path: node_modules
+          key: node-${{ hashFiles('package.json') }}
 
-      - name: Install dependencies
+      - name: Install Node dependencies
         if: steps.cache-npm.outputs.cache-hit != 'true'
-        run: |
-          npm install
-          npx puppeteer browsers install chrome
+        run: npm install
 
       - name: Restore state
         uses: actions/cache@v4
