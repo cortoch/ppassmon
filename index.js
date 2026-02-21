@@ -17,7 +17,16 @@ function loadState() {
 }
 function saveState(state) { fs.writeFileSync(CACHE_FILE, JSON.stringify(state, null, 2)); }
 
-// Convertit "30 Janvier 2026" en objet Date
+function parseReservations(text) {
+  const reservations = [];
+  const pattern = /(\d{1,2}\s+\w+(?:\s+\d{4})?)\s*[-–]\s*(\d{1,2}\s+\w+(?:\s+\d{4})?)\s*\n?\s*(\d+)\s*nuit/gi;
+  let match;
+  while ((match = pattern.exec(text)) !== null) {
+    reservations.push({ debut: match[1].trim(), fin: match[2].trim(), nuits: match[3].trim() });
+  }
+  return reservations;
+}
+
 function parseDate(str) {
   const mois = {
     "janvier": 0, "février": 1, "fevrier": 1, "mars": 2, "avril": 3,
@@ -32,7 +41,6 @@ function parseDate(str) {
   return new Date(annee, moisNum, jour);
 }
 
-// Formate une date en YYYYMMDD pour le format iCal
 function toICalDate(date) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -40,122 +48,62 @@ function toICalDate(date) {
   return `${y}${m}${d}`;
 }
 
-// Crée un fichier .ics pour une réservation
 function createICS(reservation) {
   const debut = parseDate(reservation.debut);
   const fin = parseDate(reservation.fin);
   if (!debut || !fin) return null;
-
-  // Pour Google Calendar, la date de fin est exclusive (lendemain du dernier jour)
   const finExclusive = new Date(fin);
   finExclusive.setDate(finExclusive.getDate() + 1);
-
   const uid = `passpass-${toICalDate(debut)}-${toICalDate(fin)}@passpass-monitor`;
-  const now = toICalDate(new Date()) + "T" + new Date().toISOString().replace(/[-:]/g, "").substring(9, 15) + "Z";
-
-  return `BEGIN:VCALENDAR
-VERSION:2.0
-PRODID:-//Passpass Monitor//FR
-CALSCALE:GREGORIAN
-METHOD:PUBLISH
-BEGIN:VEVENT
-UID:${uid}
-DTSTAMP:${now}
-DTSTART;VALUE=DATE:${toICalDate(debut)}
-DTEND;VALUE=DATE:${toICalDate(finExclusive)}
-SUMMARY:🏠 Réservation Le jardin d'Henri (${reservation.nuits} nuit${reservation.nuits > 1 ? 's' : ''})
-DESCRIPTION:Réservation du ${reservation.debut} au ${reservation.fin}\\n${reservation.nuits} nuit${reservation.nuits > 1 ? 's' : ''}
-LOCATION:Le jardin d'Henri
-BEGIN:VALARM
-TRIGGER:-PT24H
-ACTION:DISPLAY
-DESCRIPTION:Rappel : arrivée demain - Le jardin d'Henri
-END:VALARM
-END:VEVENT
-END:VCALENDAR`;
-}
-
-// Extrait les réservations du texte
-function parseReservations(text) {
-  const reservations = [];
-  const pattern = /(\d{1,2}\s+\w+(?:\s+\d{4})?)\s*[-–]\s*(\d{1,2}\s+\w+(?:\s+\d{4})?)\s*\n?\s*(\d+)\s*nuit/gi;
-  let match;
-  while ((match = pattern.exec(text)) !== null) {
-    reservations.push({
-      debut: match[1].trim(),
-      fin: match[2].trim(),
-      nuits: match[3].trim(),
-    });
-  }
-  return reservations;
+  const now = new Date().toISOString().replace(/[-:.]/g, "").substring(0, 15) + "Z";
+  return `BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//Passpass Monitor//FR\nCALSCALE:GREGORIAN\nMETHOD:PUBLISH\nBEGIN:VEVENT\nUID:${uid}\nDTSTAMP:${now}\nDTSTART;VALUE=DATE:${toICalDate(debut)}\nDTEND;VALUE=DATE:${toICalDate(finExclusive)}\nSUMMARY:🏠 Réservation Le jardin d'Henri (${reservation.nuits} nuit${reservation.nuits > 1 ? 's' : ''})\nDESCRIPTION:Réservation du ${reservation.debut} au ${reservation.fin}\\n${reservation.nuits} nuit${reservation.nuits > 1 ? 's' : ''}\nLOCATION:Le jardin d'Henri\nBEGIN:VALARM\nTRIGGER:-PT24H\nACTION:DISPLAY\nDESCRIPTION:Rappel : arrivée demain\nEND:VALARM\nEND:VEVENT\nEND:VCALENDAR`;
 }
 
 async function sendEmail(previousText, currentText) {
   const previousRes = parseReservations(previousText || "");
   const currentRes = parseReservations(currentText);
-
   const previousKeys = new Set(previousRes.map(r => `${r.debut}-${r.fin}`));
   const newRes = currentRes.filter(r => !previousKeys.has(`${r.debut}-${r.fin}`));
   const currentKeys = new Set(currentRes.map(r => `${r.debut}-${r.fin}`));
   const removedRes = previousRes.filter(r => !currentKeys.has(`${r.debut}-${r.fin}`));
 
-  // Crée les pièces jointes .ics pour les nouvelles réservations
   const attachments = [];
   for (const r of newRes) {
     const ics = createICS(r);
-    if (ics) {
-      attachments.push({
-        filename: `reservation-${r.debut.replace(/\s+/g, "-")}.ics`,
-        content: ics,
-        contentType: "text/calendar",
-      });
-    }
+    if (ics) attachments.push({
+      filename: `reservation-${r.debut.replace(/\s+/g, "-")}.ics`,
+      content: ics,
+      contentType: "text/calendar",
+    });
   }
 
-  const transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: { user: EMAIL_FROM, pass: EMAIL_PASSWORD },
-  });
-
+  const transporter = nodemailer.createTransport({ service: "gmail", auth: { user: EMAIL_FROM, pass: EMAIL_PASSWORD } });
   const now = new Date().toLocaleString("fr-FR", { timeZone: "Europe/Paris" });
 
-  let html = `<h2>🔔 Modification détectée sur Passpass</h2>
-              <p><strong>Date :</strong> ${now}</p>`;
-
+  let html = `<h2>🔔 Modification détectée sur Passpass</h2><p><strong>Date :</strong> ${now}</p>`;
   if (newRes.length > 0) {
     html += `<h3>🆕 Nouvelles réservations :</h3><ul>`;
-    for (const r of newRes) {
-      html += `<li>📅 <b>${r.debut}</b> → <b>${r.fin}</b> &nbsp;(${r.nuits} nuit${r.nuits > 1 ? 's' : ''})</li>`;
-    }
+    for (const r of newRes) html += `<li>📅 <b>${r.debut}</b> → <b>${r.fin}</b> &nbsp;(${r.nuits} nuit${r.nuits > 1 ? 's' : ''})</li>`;
     html += `</ul>`;
-    if (attachments.length > 0) {
-      html += `<p>📎 <i>Fichier(s) .ics joint(s) — cliquez pour ajouter à Google Calendar</i></p>`;
-    }
+    if (attachments.length > 0) html += `<p>📎 <i>Fichier(s) .ics joint(s) — cliquez pour ajouter à Google Calendar</i></p>`;
   }
-
   if (removedRes.length > 0) {
     html += `<h3>❌ Réservations annulées :</h3><ul>`;
-    for (const r of removedRes) {
-      html += `<li>📅 <b>${r.debut}</b> → <b>${r.fin}</b> &nbsp;(${r.nuits} nuit${r.nuits > 1 ? 's' : ''})</li>`;
-    }
+    for (const r of removedRes) html += `<li>📅 <b>${r.debut}</b> → <b>${r.fin}</b></li>`;
     html += `</ul>`;
   }
-
   html += `<h3>📋 Toutes les réservations actuelles :</h3><ul>`;
-  for (const r of currentRes) {
-    html += `<li>📅 ${r.debut} → ${r.fin} &nbsp;(${r.nuits} nuit${r.nuits > 1 ? 's' : ''})</li>`;
+  if (currentRes.length > 0) {
+    for (const r of currentRes) html += `<li>📅 ${r.debut} → ${r.fin} &nbsp;(${r.nuits} nuit${r.nuits > 1 ? 's' : ''})</li>`;
+  } else {
+    html += `<li><i>Aucune réservation détectée (format non reconnu)</i></li>`;
   }
-  html += `</ul>`;
-  html += `<p><a href="https://client.passpass.io/dashboard">👉 Voir le dashboard</a></p>`;
+  html += `</ul><p><a href="https://client.passpass.io/dashboard">👉 Voir le dashboard</a></p>`;
 
   await transporter.sendMail({
-    from: EMAIL_FROM,
-    to: EMAIL_TO,
-    subject: newRes.length > 0
-      ? `🆕 Nouvelle réservation : ${newRes[0].debut} → ${newRes[0].fin}`
-      : `🔔 Passpass - Modification détectée`,
-    html,
-    attachments,
+    from: EMAIL_FROM, to: EMAIL_TO,
+    subject: newRes.length > 0 ? `🆕 Nouvelle réservation : ${newRes[0].debut} → ${newRes[0].fin}` : `🔔 Passpass - Modification détectée`,
+    html, attachments,
   });
   console.log(`✅ Email envoyé avec ${attachments.length} fichier(s) .ics`);
 }
@@ -209,6 +157,10 @@ async function scrapePasspass() {
       return body.innerText;
     });
     console.log(`📁 dashboard: ${content.length} caractères`);
+    // Log du contenu complet pour debug
+    console.log("=== CONTENU COMPLET ===");
+    console.log(content);
+    console.log("=== FIN CONTENU ===");
     const reservations = parseReservations(content);
     console.log(`📅 ${reservations.length} réservation(s) trouvée(s)`);
     reservations.forEach(r => console.log(`   ${r.debut} → ${r.fin} (${r.nuits} nuits)`));
@@ -224,7 +176,6 @@ async function main() {
     const currentContent = await scrapePasspass();
     const previousState = loadState();
     const currentHash = hash(currentContent);
-
     if ("dashboard" in previousState) {
       if (previousState.dashboard.hash !== currentHash) {
         console.log("🔄 CHANGEMENT détecté !");
@@ -236,7 +187,6 @@ async function main() {
       console.log("🆕 Première observation — email récapitulatif envoyé");
       await sendEmail("", currentContent);
     }
-
     saveState({ dashboard: { hash: currentHash, content: currentContent } });
     console.log("💾 État sauvegardé");
     process.exit(0);
