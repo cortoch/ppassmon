@@ -10,8 +10,6 @@ const EMAIL_TO = process.env.EMAIL_TO || "henri.borreill@gmail.com";
 const EMAIL_PASSWORD = process.env.EMAIL_PASSWORD || "REMPLACE";
 const CACHE_FILE = "state.json";
 
-console.log("Email:", PASSPASS_EMAIL, "/ Password length:", PASSPASS_PASSWORD?.length);
-
 function hash(str) { return crypto.createHash("md5").update(str).digest("hex"); }
 function loadState() {
   if (fs.existsSync(CACHE_FILE)) return JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
@@ -19,70 +17,102 @@ function loadState() {
 }
 function saveState(state) { fs.writeFileSync(CACHE_FILE, JSON.stringify(state, null, 2)); }
 
-async function sendEmail(changes) {
+// Extrait les réservations du texte du dashboard
+function parseReservations(text) {
+  const reservations = [];
+  // Pattern : "30 Janvier - 1 Février" ou "3 Février - 15 Février"
+  const pattern = /(\d{1,2}\s+\w+(?:\s+\d{4})?)\s*[-–]\s*(\d{1,2}\s+\w+(?:\s+\d{4})?)\s*\n?\s*(\d+)\s*nuit/gi;
+  let match;
+  while ((match = pattern.exec(text)) !== null) {
+    reservations.push({
+      debut: match[1].trim(),
+      fin: match[2].trim(),
+      nuits: match[3].trim(),
+    });
+  }
+  return reservations;
+}
+
+async function sendEmail(previousText, currentText) {
+  const previousRes = parseReservations(previousText || "");
+  const currentRes = parseReservations(currentText);
+
+  // Trouve les nouvelles réservations
+  const previousKeys = new Set(previousRes.map(r => `${r.debut}-${r.fin}`));
+  const newRes = currentRes.filter(r => !previousKeys.has(`${r.debut}-${r.fin}`));
+
+  // Trouve les réservations supprimées
+  const currentKeys = new Set(currentRes.map(r => `${r.debut}-${r.fin}`));
+  const removedRes = previousRes.filter(r => !currentKeys.has(`${r.debut}-${r.fin}`));
+
   const transporter = nodemailer.createTransport({
     service: "gmail",
     auth: { user: EMAIL_FROM, pass: EMAIL_PASSWORD },
   });
+
   const now = new Date().toLocaleString("fr-FR", { timeZone: "Europe/Paris" });
+
+  let html = `<h2>🔔 Modification détectée sur Passpass</h2>
+              <p><strong>Date :</strong> ${now}</p>`;
+
+  if (newRes.length > 0) {
+    html += `<h3>🆕 Nouvelles réservations :</h3><ul>`;
+    for (const r of newRes) {
+      html += `<li>📅 <b>${r.debut}</b> → <b>${r.fin}</b> &nbsp;(${r.nuits} nuit${r.nuits > 1 ? 's' : ''})</li>`;
+    }
+    html += `</ul>`;
+  }
+
+  if (removedRes.length > 0) {
+    html += `<h3>❌ Réservations annulées :</h3><ul>`;
+    for (const r of removedRes) {
+      html += `<li>📅 <b>${r.debut}</b> → <b>${r.fin}</b> &nbsp;(${r.nuits} nuit${r.nuits > 1 ? 's' : ''})</li>`;
+    }
+    html += `</ul>`;
+  }
+
+  html += `<h3>📋 Toutes les réservations actuelles :</h3><ul>`;
+  for (const r of currentRes) {
+    html += `<li>📅 ${r.debut} → ${r.fin} &nbsp;(${r.nuits} nuit${r.nuits > 1 ? 's' : ''})</li>`;
+  }
+  html += `</ul>`;
+  html += `<p><a href="https://client.passpass.io/dashboard">👉 Voir le dashboard</a></p>`;
+
   await transporter.sendMail({
     from: EMAIL_FROM,
     to: EMAIL_TO,
-    subject: "🔔 Passpass - Modification détectée",
-    html: `<h2>🔔 Modifications détectées sur Passpass</h2>
-           <p><strong>Date :</strong> ${now}</p>
-           <ul>${changes.map((c) => `<li>${c}</li>`).join("")}</ul>
-           <p><a href="https://client.passpass.io/dashboard">👉 Voir le dashboard</a></p>`,
+    subject: newRes.length > 0
+      ? `🆕 Nouvelle réservation Passpass : ${newRes[0].debut} → ${newRes[0].fin}`
+      : `🔔 Passpass - Modification détectée`,
+    html,
   });
   console.log(`✅ Email envoyé à ${EMAIL_TO}`);
-}
-
-async function typeInField(page, selector, text) {
-  await page.click(selector, { clickCount: 3 });
-  await page.evaluate((sel) => { document.querySelector(sel).value = ""; }, selector);
-  for (let i = 0; i < text.length; i++) {
-    await page.evaluate((sel, char) => {
-      const el = document.querySelector(sel);
-      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-      nativeInputValueSetter.call(el, el.value + char);
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-    }, selector, text[i]);
-  }
-  await page.evaluate((sel) => {
-    document.querySelector(sel).dispatchEvent(new Event('change', { bubbles: true }));
-  }, selector);
 }
 
 async function login(page) {
   await page.goto("https://client.passpass.io/login", { waitUntil: "networkidle2", timeout: 30000 });
   await page.waitForSelector("#email", { timeout: 10000 });
 
-  // Screenshot avant remplissage
-  await page.screenshot({ path: "before_fill.png" });
+  await page.evaluate((email, password) => {
+    function fill(id, value) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.value = "";
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      setter.call(el, value);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    fill("email", email);
+    fill("password", password);
+  }, PASSPASS_EMAIL, PASSPASS_PASSWORD);
 
-  await typeInField(page, "#email", PASSPASS_EMAIL);
   await new Promise(r => setTimeout(r, 500));
-  await typeInField(page, "#password", PASSPASS_PASSWORD);
-  await new Promise(r => setTimeout(r, 500));
-
-  // Screenshot après remplissage
-  await page.screenshot({ path: "after_fill.png" });
-
   await page.evaluate(() => {
     const btn = document.querySelector('button[type="submit"]') || document.querySelector('button');
     if (btn) btn.click();
   });
-
   await new Promise(r => setTimeout(r, 8000));
-
-  // Screenshot après tentative login
-  await page.screenshot({ path: "after_login.png" });
-  console.log("URL après login:", page.url());
-
-  // Affiche le contenu de la page pour debug
-  const pageText = await page.evaluate(() => document.body.innerText);
-  console.log("Contenu page:", pageText.substring(0, 300));
-
   if (page.url().includes("login")) throw new Error("Connexion échouée");
 }
 
@@ -92,17 +122,12 @@ async function scrapePasspass() {
   const browser = await puppeteer.launch({
     executablePath: "/usr/bin/google-chrome-stable",
     headless: false,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--window-size=1280,800",
-    ],
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--window-size=1280,800"],
     defaultViewport: { width: 1280, height: 800 },
   });
 
   try {
     const page = await browser.newPage();
-    console.log("🔐 Connexion...");
     await login(page);
     console.log("✅ Connecté !");
 
@@ -120,7 +145,13 @@ async function scrapePasspass() {
     });
 
     console.log(`📁 dashboard: ${content.length} caractères`);
-    return { dashboard: content };
+
+    // Affiche les réservations trouvées
+    const reservations = parseReservations(content);
+    console.log(`📅 Réservations trouvées: ${reservations.length}`);
+    reservations.forEach(r => console.log(`   ${r.debut} → ${r.fin} (${r.nuits} nuits)`));
+
+    return content;
 
   } finally {
     await browser.close();
@@ -130,28 +161,24 @@ async function scrapePasspass() {
 async function main() {
   console.log("🚀 Passpass Monitor - GitHub Actions");
   try {
-    const scraped = await scrapePasspass();
+    const currentContent = await scrapePasspass();
     const previousState = loadState();
-    const currentState = {};
-    const changes = [];
+    const currentHash = hash(currentContent);
 
-    for (const [key, content] of Object.entries(scraped)) {
-      const currentHash = hash(content);
-      currentState[key] = { hash: currentHash, length: content.length };
-      if (key in previousState) {
-        if (previousState[key].hash !== currentHash) {
-          changes.push(`<b>${key}</b> a été modifié`);
-          console.log(`🔄 CHANGEMENT dans '${key}'!`);
-        }
+    if ("dashboard" in previousState) {
+      if (previousState.dashboard.hash !== currentHash) {
+        console.log("🔄 CHANGEMENT détecté !");
+        await sendEmail(previousState.dashboard.content || "", currentContent);
       } else {
-        console.log(`🆕 Première observation: ${key} (${content.length} caractères)`);
+        console.log("✅ Aucun changement détecté");
       }
+    } else {
+      console.log("🆕 Première observation");
+      // Envoie un email récapitulatif au démarrage
+      await sendEmail("", currentContent);
     }
 
-    if (changes.length > 0) await sendEmail(changes);
-    else console.log("✅ Aucun changement détecté");
-
-    saveState(currentState);
+    saveState({ dashboard: { hash: currentHash, content: currentContent } });
     console.log("💾 État sauvegardé");
     process.exit(0);
   } catch (e) {
