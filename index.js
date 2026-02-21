@@ -19,12 +19,14 @@ function saveState(state) { fs.writeFileSync(CACHE_FILE, JSON.stringify(state, n
 
 function parseReservations(text) {
   const reservations = [];
-  const lines = text.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+  const lines = text.split("\n")
+    .map(l => l.replace(/\s+/g, " ").trim())
+    .filter(l => l.length > 0);
   for (let i = 0; i < lines.length - 1; i++) {
     const dateMatch = lines[i].match(/^(\d{1,2}\s+\w+(?:\s+\d{4})?)\s*-\s*(\d{1,2}\s+\w+(?:\s+\d{4})?)$/);
     if (dateMatch) {
       const nuits = lines[i + 1]?.match(/^\d+$/) ? lines[i + 1].trim() : "?";
-      const etat = lines[i + 2] || "";
+      const etat = lines[i + 2]?.match(/^\d+$/) ? lines[i + 3] || "" : lines[i + 2] || "";
       reservations.push({ debut: dateMatch[1].trim(), fin: dateMatch[2].trim(), nuits, etat: etat.trim() });
     }
   }
@@ -60,15 +62,40 @@ function createICS(reservation) {
   return `BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//Passpass Monitor//FR\nCALSCALE:GREGORIAN\nMETHOD:PUBLISH\nBEGIN:VEVENT\nUID:${uid}\nDTSTAMP:${now}\nDTSTART;VALUE=DATE:${toICalDate(debut)}\nDTEND;VALUE=DATE:${toICalDate(finExclusive)}\nSUMMARY:🏠 Réservation Le jardin d'Henri (${reservation.nuits} nuit${reservation.nuits > 1 ? 's' : ''})\nDESCRIPTION:Réservation du ${reservation.debut} au ${reservation.fin}\\n${reservation.nuits} nuit${reservation.nuits > 1 ? 's' : ''}\\nÉtat: ${reservation.etat}\nLOCATION:Le jardin d'Henri\nBEGIN:VALARM\nTRIGGER:-PT24H\nACTION:DISPLAY\nDESCRIPTION:Rappel : arrivée demain - Le jardin d'Henri\nEND:VALARM\nEND:VEVENT\nEND:VCALENDAR`;
 }
 
-function getNextMonths(n = 3) {
-  const nomsMois = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"];
-  const result = [];
-  const now = new Date();
-  for (let i = 1; i <= n; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
-    result.push(`${nomsMois[d.getMonth()]} ${d.getFullYear()}`);
-  }
-  return result;
+async function clickNextMonth(page) {
+  // Clique sur la flèche > à droite du calendrier
+  const clicked = await page.evaluate(() => {
+    const buttons = Array.from(document.querySelectorAll("button"));
+    // La flèche > est un bouton avec ">" ou "›" ou une icône chevron
+    const nextBtn = buttons.find(b => {
+      const text = b.innerText?.trim();
+      const html = b.innerHTML;
+      return text === ">" || text === "›" || text === "→" ||
+             html.includes("chevron-right") || html.includes("angle-right") ||
+             html.includes("fa-chevron") || html.includes("fa-angle") ||
+             (html.includes("svg") && !b.closest("a") && buttons.indexOf(b) > 0);
+    });
+    if (nextBtn) { nextBtn.click(); return true; }
+
+    // Fallback : le 2ème bouton sur la page (< et > sont souvent les 2 premiers)
+    const allBtns = buttons.filter(b => b.innerText?.trim().length <= 2);
+    if (allBtns.length >= 2) { allBtns[1].click(); return true; }
+    return false;
+  });
+  return clicked;
+}
+
+async function getMonthReservations(page, label) {
+  await new Promise(r => setTimeout(r, 3000));
+  const content = await page.evaluate(() => {
+    const body = document.body.cloneNode(true);
+    body.querySelectorAll("script, style").forEach(el => el.remove());
+    return body.innerText;
+  });
+  const res = parseReservations(content);
+  console.log(`📅 ${label}: ${res.length} réservation(s)`);
+  res.forEach(r => console.log(`   ${r.debut} → ${r.fin} (${r.nuits} nuits) — ${r.etat}`));
+  return res;
 }
 
 async function sendEmail(previousAllRes, allReservations) {
@@ -162,64 +189,15 @@ async function scrapePasspass() {
     });
     await new Promise(r => setTimeout(r, 4000));
 
-    // Log complet pour debug
-    const currentContent = await page.evaluate(() => {
-      const body = document.body.cloneNode(true);
-      body.querySelectorAll("script, style").forEach(el => el.remove());
-      return body.innerText;
-    });
-    console.log("=== CONTENU COMPLET ===");
-    console.log(currentContent);
-    console.log("=== FIN CONTENU ===");
-
-    // Liste tous les liens/boutons pour trouver les mois
-    const allLinks = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll("a, button, li, [class*='dropdown'] *"))
-        .map(e => e.innerText?.trim())
-        .filter(t => t && t.length > 0 && t.length < 30);
-    });
-    console.log("=== LIENS/BOUTONS DISPONIBLES ===");
-    console.log([...new Set(allLinks)].join("\n"));
-    console.log("=== FIN LIENS ===");
-
-    const currentRes = parseReservations(currentContent);
+    // Mois en cours
+    const currentRes = await getMonthReservations(page, "Mois en cours");
     let allReservations = [...currentRes];
 
-    // Navigue vers les 3 mois suivants via le bouton "suivant" du calendrier
-    const nextMonths = getNextMonths(3);
-    for (const month of nextMonths) {
-      console.log(`\n📆 Tentative navigation: "${month}"`);
-
-      // Essaie de cliquer sur la flèche "suivant" du calendrier
-      const clicked = await page.evaluate((monthLabel) => {
-        // Cherche dans tous les éléments
-        const all = Array.from(document.querySelectorAll("*"));
-        const el = all.find(e => e.innerText?.trim() === monthLabel && e.children.length <= 2);
-        if (el) { el.click(); return `trouvé: ${el.tagName}.${el.className}`; }
-
-        // Cherche la flèche suivante
-        const arrows = document.querySelectorAll("[class*='next'], [class*='arrow'], [class*='chevron'], button");
-        for (const a of arrows) {
-          if (a.innerHTML.includes('>') || a.innerHTML.includes('›') || a.innerHTML.includes('→')) {
-            a.click();
-            return `flèche cliquée: ${a.tagName}`;
-          }
-        }
-        return null;
-      }, month);
-
-      console.log(`   Résultat clic: ${clicked}`);
-      await new Promise(r => setTimeout(r, 3000));
-
-      const monthContent = await page.evaluate(() => {
-        const body = document.body.cloneNode(true);
-        body.querySelectorAll("script, style").forEach(el => el.remove());
-        return body.innerText;
-      });
-
-      const monthRes = parseReservations(monthContent);
-      console.log(`   ${monthRes.length} réservation(s) trouvée(s)`);
-      monthRes.forEach(r => console.log(`   ${r.debut} → ${r.fin} (${r.nuits} nuits)`));
+    // 3 mois suivants via la flèche >
+    for (let i = 1; i <= 3; i++) {
+      const clicked = await clickNextMonth(page);
+      console.log(`📆 Flèche > cliquée (mois +${i}): ${clicked ? "✅" : "❌"}`);
+      const monthRes = await getMonthReservations(page, `Mois +${i}`);
       allReservations = [...allReservations, ...monthRes];
     }
 
@@ -233,7 +211,7 @@ async function scrapePasspass() {
     });
 
     console.log(`\n📊 Total: ${allReservations.length} réservation(s) sur 4 mois`);
-    return { currentContent, allReservations };
+    return allReservations;
 
   } finally {
     await browser.close();
@@ -243,14 +221,14 @@ async function scrapePasspass() {
 async function main() {
   console.log("🚀 Passpass Monitor - GitHub Actions");
   try {
-    const { currentContent, allReservations } = await scrapePasspass();
+    const allReservations = await scrapePasspass();
     const previousState = loadState();
     const currentHash = hash(JSON.stringify(allReservations));
 
     if ("dashboard" in previousState) {
       if (previousState.dashboard.hash !== currentHash) {
         console.log("🔄 CHANGEMENT détecté !");
-        await sendEmail(previousState.dashboard.allReservations || [], allReservations);
+        await sendEmail(previousState.dashboard.reservations || [], allReservations);
       } else {
         console.log("✅ Aucun changement détecté");
       }
@@ -259,7 +237,7 @@ async function main() {
       await sendEmail([], allReservations);
     }
 
-    saveState({ dashboard: { hash: currentHash, content: currentContent, allReservations } });
+    saveState({ dashboard: { hash: currentHash, reservations: allReservations } });
     console.log("💾 État sauvegardé");
     process.exit(0);
   } catch (e) {
