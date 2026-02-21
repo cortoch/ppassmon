@@ -19,10 +19,14 @@ function saveState(state) { fs.writeFileSync(CACHE_FILE, JSON.stringify(state, n
 
 function parseReservations(text) {
   const reservations = [];
-  const pattern = /(\d{1,2}\s+\w+(?:\s+\d{4})?)\s*[-–]\s*(\d{1,2}\s+\w+(?:\s+\d{4})?)\s*\n?\s*(\d+)\s*nuit/gi;
-  let match;
-  while ((match = pattern.exec(text)) !== null) {
-    reservations.push({ debut: match[1].trim(), fin: match[2].trim(), nuits: match[3].trim() });
+  const lines = text.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+  for (let i = 0; i < lines.length - 1; i++) {
+    const dateMatch = lines[i].match(/^(\d{1,2}\s+\w+(?:\s+\d{4})?)\s*-\s*(\d{1,2}\s+\w+(?:\s+\d{4})?)$/);
+    if (dateMatch) {
+      const nuits = lines[i + 1]?.match(/^\d+$/) ? lines[i + 1].trim() : "?";
+      const etat = lines[i + 2] || "";
+      reservations.push({ debut: dateMatch[1].trim(), fin: dateMatch[2].trim(), nuits, etat: etat.trim() });
+    }
   }
   return reservations;
 }
@@ -42,10 +46,7 @@ function parseDate(str) {
 }
 
 function toICalDate(date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}${m}${d}`;
+  return `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}${String(date.getDate()).padStart(2, "0")}`;
 }
 
 function createICS(reservation) {
@@ -56,14 +57,57 @@ function createICS(reservation) {
   finExclusive.setDate(finExclusive.getDate() + 1);
   const uid = `passpass-${toICalDate(debut)}-${toICalDate(fin)}@passpass-monitor`;
   const now = new Date().toISOString().replace(/[-:.]/g, "").substring(0, 15) + "Z";
-  return `BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//Passpass Monitor//FR\nCALSCALE:GREGORIAN\nMETHOD:PUBLISH\nBEGIN:VEVENT\nUID:${uid}\nDTSTAMP:${now}\nDTSTART;VALUE=DATE:${toICalDate(debut)}\nDTEND;VALUE=DATE:${toICalDate(finExclusive)}\nSUMMARY:🏠 Réservation Le jardin d'Henri (${reservation.nuits} nuit${reservation.nuits > 1 ? 's' : ''})\nDESCRIPTION:Réservation du ${reservation.debut} au ${reservation.fin}\\n${reservation.nuits} nuit${reservation.nuits > 1 ? 's' : ''}\nLOCATION:Le jardin d'Henri\nBEGIN:VALARM\nTRIGGER:-PT24H\nACTION:DISPLAY\nDESCRIPTION:Rappel : arrivée demain\nEND:VALARM\nEND:VEVENT\nEND:VCALENDAR`;
+  return `BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//Passpass Monitor//FR\nCALSCALE:GREGORIAN\nMETHOD:PUBLISH\nBEGIN:VEVENT\nUID:${uid}\nDTSTAMP:${now}\nDTSTART;VALUE=DATE:${toICalDate(debut)}\nDTEND;VALUE=DATE:${toICalDate(finExclusive)}\nSUMMARY:🏠 Réservation Le jardin d'Henri (${reservation.nuits} nuit${reservation.nuits > 1 ? 's' : ''})\nDESCRIPTION:Réservation du ${reservation.debut} au ${reservation.fin}\\n${reservation.nuits} nuit${reservation.nuits > 1 ? 's' : ''}\\nÉtat: ${reservation.etat}\nLOCATION:Le jardin d'Henri\nBEGIN:VALARM\nTRIGGER:-PT24H\nACTION:DISPLAY\nDESCRIPTION:Rappel : arrivée demain - Le jardin d'Henri\nEND:VALARM\nEND:VEVENT\nEND:VCALENDAR`;
 }
 
-async function sendEmail(previousText, currentText) {
+// Génère les noms des 3 prochains mois en français
+function getNextMonths(n = 3) {
+  const nomsMois = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"];
+  const result = [];
+  const now = new Date();
+  for (let i = 1; i <= n; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+    result.push(`${nomsMois[d.getMonth()]} ${d.getFullYear()}`);
+  }
+  return result;
+}
+
+async function getReservationsForMonth(page, monthLabel) {
+  // Clique sur le bouton du mois dans la liste déroulante
+  const clicked = await page.evaluate((label) => {
+    const links = Array.from(document.querySelectorAll("a, button, li"));
+    const el = links.find(e => e.innerText?.trim() === label);
+    if (el) { el.click(); return true; }
+    return false;
+  }, monthLabel);
+
+  if (!clicked) {
+    console.log(`⚠️ Mois "${monthLabel}" non trouvé dans le menu`);
+    return [];
+  }
+
+  await new Promise(r => setTimeout(r, 3000));
+
+  const content = await page.evaluate(() => {
+    const body = document.body.cloneNode(true);
+    body.querySelectorAll("script, style").forEach(el => el.remove());
+    return body.innerText;
+  });
+
+  const reservations = parseReservations(content);
+  console.log(`📅 ${monthLabel}: ${reservations.length} réservation(s)`);
+  reservations.forEach(r => console.log(`   ${r.debut} → ${r.fin} (${r.nuits} nuits) — ${r.etat}`));
+  return reservations;
+}
+
+async function sendEmail(previousText, currentText, allReservations) {
   const previousRes = parseReservations(previousText || "");
   const currentRes = parseReservations(currentText);
   const previousKeys = new Set(previousRes.map(r => `${r.debut}-${r.fin}`));
-  const newRes = currentRes.filter(r => !previousKeys.has(`${r.debut}-${r.fin}`));
+  const allKeys = new Set(allReservations.map(r => `${r.debut}-${r.fin}`));
+
+  // Nouvelles réservations = dans allReservations mais pas dans previousRes
+  const newRes = allReservations.filter(r => !previousKeys.has(`${r.debut}-${r.fin}`));
   const currentKeys = new Set(currentRes.map(r => `${r.debut}-${r.fin}`));
   const removedRes = previousRes.filter(r => !currentKeys.has(`${r.debut}-${r.fin}`));
 
@@ -81,28 +125,32 @@ async function sendEmail(previousText, currentText) {
   const now = new Date().toLocaleString("fr-FR", { timeZone: "Europe/Paris" });
 
   let html = `<h2>🔔 Modification détectée sur Passpass</h2><p><strong>Date :</strong> ${now}</p>`;
+
   if (newRes.length > 0) {
     html += `<h3>🆕 Nouvelles réservations :</h3><ul>`;
-    for (const r of newRes) html += `<li>📅 <b>${r.debut}</b> → <b>${r.fin}</b> &nbsp;(${r.nuits} nuit${r.nuits > 1 ? 's' : ''})</li>`;
+    for (const r of newRes) html += `<li>📅 <b>${r.debut}</b> → <b>${r.fin}</b> (${r.nuits} nuit${r.nuits > 1 ? 's' : ''}) — ${r.etat}</li>`;
     html += `</ul>`;
     if (attachments.length > 0) html += `<p>📎 <i>Fichier(s) .ics joint(s) — cliquez pour ajouter à Google Calendar</i></p>`;
   }
+
   if (removedRes.length > 0) {
     html += `<h3>❌ Réservations annulées :</h3><ul>`;
     for (const r of removedRes) html += `<li>📅 <b>${r.debut}</b> → <b>${r.fin}</b></li>`;
     html += `</ul>`;
   }
-  html += `<h3>📋 Toutes les réservations actuelles :</h3><ul>`;
-  if (currentRes.length > 0) {
-    for (const r of currentRes) html += `<li>📅 ${r.debut} → ${r.fin} &nbsp;(${r.nuits} nuit${r.nuits > 1 ? 's' : ''})</li>`;
-  } else {
-    html += `<li><i>Aucune réservation détectée (format non reconnu)</i></li>`;
+
+  html += `<h3>📋 Toutes les réservations (mois en cours + 3 suivants) :</h3><ul>`;
+  for (const r of allReservations) {
+    const emoji = r.etat.includes("cours") ? "🟠" : r.etat.includes("attente") ? "🟡" : "✅";
+    html += `<li>${emoji} ${r.debut} → ${r.fin} (${r.nuits} nuit${r.nuits > 1 ? 's' : ''}) — ${r.etat}</li>`;
   }
   html += `</ul><p><a href="https://client.passpass.io/dashboard">👉 Voir le dashboard</a></p>`;
 
   await transporter.sendMail({
     from: EMAIL_FROM, to: EMAIL_TO,
-    subject: newRes.length > 0 ? `🆕 Nouvelle réservation : ${newRes[0].debut} → ${newRes[0].fin}` : `🔔 Passpass - Modification détectée`,
+    subject: newRes.length > 0
+      ? `🆕 Nouvelle réservation : ${newRes[0].debut} → ${newRes[0].fin}`
+      : `🔔 Passpass - Modification détectée`,
     html, attachments,
   });
   console.log(`✅ Email envoyé avec ${attachments.length} fichier(s) .ics`);
@@ -145,26 +193,48 @@ async function scrapePasspass() {
     const page = await browser.newPage();
     await login(page);
     console.log("✅ Connecté !");
+
+    // Clique sur la propriété
     await page.evaluate(() => {
       const els = Array.from(document.querySelectorAll("*"));
       const el = els.find(e => e.innerText?.trim().includes("Le jardin d'Henri") && e.children.length === 0);
       if (el) el.click();
     });
     await new Promise(r => setTimeout(r, 4000));
-    const content = await page.evaluate(() => {
+
+    // Mois en cours
+    const currentContent = await page.evaluate(() => {
       const body = document.body.cloneNode(true);
       body.querySelectorAll("script, style").forEach(el => el.remove());
       return body.innerText;
     });
-    console.log(`📁 dashboard: ${content.length} caractères`);
-    // Log du contenu complet pour debug
-    console.log("=== CONTENU COMPLET ===");
-    console.log(content);
-    console.log("=== FIN CONTENU ===");
-    const reservations = parseReservations(content);
-    console.log(`📅 ${reservations.length} réservation(s) trouvée(s)`);
-    reservations.forEach(r => console.log(`   ${r.debut} → ${r.fin} (${r.nuits} nuits)`));
-    return content;
+    console.log(`📁 Mois en cours: ${currentContent.length} caractères`);
+    const currentRes = parseReservations(currentContent);
+    console.log(`📅 Mois en cours: ${currentRes.length} réservation(s)`);
+    currentRes.forEach(r => console.log(`   ${r.debut} → ${r.fin} (${r.nuits} nuits) — ${r.etat}`));
+
+    // 3 mois suivants
+    const nextMonths = getNextMonths(3);
+    console.log(`\n📆 Navigation vers les mois suivants: ${nextMonths.join(", ")}`);
+    let allReservations = [...currentRes];
+
+    for (const month of nextMonths) {
+      const res = await getReservationsForMonth(page, month);
+      allReservations = [...allReservations, ...res];
+    }
+
+    // Déduplique les réservations
+    const seen = new Set();
+    allReservations = allReservations.filter(r => {
+      const key = `${r.debut}-${r.fin}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    console.log(`\n📊 Total: ${allReservations.length} réservation(s) sur 4 mois`);
+    return { currentContent, allReservations };
+
   } finally {
     await browser.close();
   }
@@ -173,21 +243,23 @@ async function scrapePasspass() {
 async function main() {
   console.log("🚀 Passpass Monitor - GitHub Actions");
   try {
-    const currentContent = await scrapePasspass();
+    const { currentContent, allReservations } = await scrapePasspass();
     const previousState = loadState();
-    const currentHash = hash(currentContent);
+    const currentHash = hash(JSON.stringify(allReservations));
+
     if ("dashboard" in previousState) {
       if (previousState.dashboard.hash !== currentHash) {
         console.log("🔄 CHANGEMENT détecté !");
-        await sendEmail(previousState.dashboard.content || "", currentContent);
+        await sendEmail(previousState.dashboard.content || "", currentContent, allReservations);
       } else {
         console.log("✅ Aucun changement détecté");
       }
     } else {
       console.log("🆕 Première observation — email récapitulatif envoyé");
-      await sendEmail("", currentContent);
+      await sendEmail("", currentContent, allReservations);
     }
-    saveState({ dashboard: { hash: currentHash, content: currentContent } });
+
+    saveState({ dashboard: { hash: currentHash, content: currentContent, allReservations } });
     console.log("💾 État sauvegardé");
     process.exit(0);
   } catch (e) {
