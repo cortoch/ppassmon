@@ -56,27 +56,41 @@ async function typeInField(page, selector, text) {
 async function login(page) {
   await page.goto("https://client.passpass.io/login", { waitUntil: "networkidle2", timeout: 30000 });
   await page.waitForSelector("#email", { timeout: 10000 });
+
+  // Screenshot avant remplissage
+  await page.screenshot({ path: "before_fill.png" });
+
   await typeInField(page, "#email", PASSPASS_EMAIL);
-  await new Promise(r => setTimeout(r, 300));
+  await new Promise(r => setTimeout(r, 500));
   await typeInField(page, "#password", PASSPASS_PASSWORD);
-  await new Promise(r => setTimeout(r, 300));
+  await new Promise(r => setTimeout(r, 500));
+
+  // Screenshot après remplissage
+  await page.screenshot({ path: "after_fill.png" });
+
   await page.evaluate(() => {
     const btn = document.querySelector('button[type="submit"]') || document.querySelector('button');
     if (btn) btn.click();
   });
+
   await new Promise(r => setTimeout(r, 8000));
+
+  // Screenshot après tentative login
+  await page.screenshot({ path: "after_login.png" });
   console.log("URL après login:", page.url());
+
+  // Affiche le contenu de la page pour debug
+  const pageText = await page.evaluate(() => document.body.innerText);
+  console.log("Contenu page:", pageText.substring(0, 300));
+
   if (page.url().includes("login")) throw new Error("Connexion échouée");
 }
 
 async function scrapePasspass() {
   console.log(`🔍 Vérification - ${new Date().toLocaleString("fr-FR")}`);
 
-  // Utilise le Chrome système installé par apt-get
-  const executablePath = "/usr/bin/google-chrome-stable";
-
   const browser = await puppeteer.launch({
-    executablePath,
+    executablePath: "/usr/bin/google-chrome-stable",
     headless: false,
     args: [
       "--no-sandbox",
