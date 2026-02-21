@@ -55,6 +55,13 @@ jobs:
           sleep 2
           node index.js
 
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: "*.png"
+
       - name: Save state
         if: always()
         uses: actions/cache@v4
