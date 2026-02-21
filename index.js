@@ -60,7 +60,6 @@ function createICS(reservation) {
   return `BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//Passpass Monitor//FR\nCALSCALE:GREGORIAN\nMETHOD:PUBLISH\nBEGIN:VEVENT\nUID:${uid}\nDTSTAMP:${now}\nDTSTART;VALUE=DATE:${toICalDate(debut)}\nDTEND;VALUE=DATE:${toICalDate(finExclusive)}\nSUMMARY:🏠 Réservation Le jardin d'Henri (${reservation.nuits} nuit${reservation.nuits > 1 ? 's' : ''})\nDESCRIPTION:Réservation du ${reservation.debut} au ${reservation.fin}\\n${reservation.nuits} nuit${reservation.nuits > 1 ? 's' : ''}\\nÉtat: ${reservation.etat}\nLOCATION:Le jardin d'Henri\nBEGIN:VALARM\nTRIGGER:-PT24H\nACTION:DISPLAY\nDESCRIPTION:Rappel : arrivée demain - Le jardin d'Henri\nEND:VALARM\nEND:VEVENT\nEND:VCALENDAR`;
 }
 
-// Génère les noms des 3 prochains mois en français
 function getNextMonths(n = 3) {
   const nomsMois = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"];
   const result = [];
@@ -72,44 +71,11 @@ function getNextMonths(n = 3) {
   return result;
 }
 
-async function getReservationsForMonth(page, monthLabel) {
-  // Clique sur le bouton du mois dans la liste déroulante
-  const clicked = await page.evaluate((label) => {
-    const links = Array.from(document.querySelectorAll("a, button, li"));
-    const el = links.find(e => e.innerText?.trim() === label);
-    if (el) { el.click(); return true; }
-    return false;
-  }, monthLabel);
-
-  if (!clicked) {
-    console.log(`⚠️ Mois "${monthLabel}" non trouvé dans le menu`);
-    return [];
-  }
-
-  await new Promise(r => setTimeout(r, 3000));
-
-  const content = await page.evaluate(() => {
-    const body = document.body.cloneNode(true);
-    body.querySelectorAll("script, style").forEach(el => el.remove());
-    return body.innerText;
-  });
-
-  const reservations = parseReservations(content);
-  console.log(`📅 ${monthLabel}: ${reservations.length} réservation(s)`);
-  reservations.forEach(r => console.log(`   ${r.debut} → ${r.fin} (${r.nuits} nuits) — ${r.etat}`));
-  return reservations;
-}
-
-async function sendEmail(previousText, currentText, allReservations) {
-  const previousRes = parseReservations(previousText || "");
-  const currentRes = parseReservations(currentText);
-  const previousKeys = new Set(previousRes.map(r => `${r.debut}-${r.fin}`));
-  const allKeys = new Set(allReservations.map(r => `${r.debut}-${r.fin}`));
-
-  // Nouvelles réservations = dans allReservations mais pas dans previousRes
+async function sendEmail(previousAllRes, allReservations) {
+  const previousKeys = new Set(previousAllRes.map(r => `${r.debut}-${r.fin}`));
   const newRes = allReservations.filter(r => !previousKeys.has(`${r.debut}-${r.fin}`));
-  const currentKeys = new Set(currentRes.map(r => `${r.debut}-${r.fin}`));
-  const removedRes = previousRes.filter(r => !currentKeys.has(`${r.debut}-${r.fin}`));
+  const currentKeys = new Set(allReservations.map(r => `${r.debut}-${r.fin}`));
+  const removedRes = previousAllRes.filter(r => !currentKeys.has(`${r.debut}-${r.fin}`));
 
   const attachments = [];
   for (const r of newRes) {
@@ -125,21 +91,18 @@ async function sendEmail(previousText, currentText, allReservations) {
   const now = new Date().toLocaleString("fr-FR", { timeZone: "Europe/Paris" });
 
   let html = `<h2>🔔 Modification détectée sur Passpass</h2><p><strong>Date :</strong> ${now}</p>`;
-
   if (newRes.length > 0) {
     html += `<h3>🆕 Nouvelles réservations :</h3><ul>`;
     for (const r of newRes) html += `<li>📅 <b>${r.debut}</b> → <b>${r.fin}</b> (${r.nuits} nuit${r.nuits > 1 ? 's' : ''}) — ${r.etat}</li>`;
     html += `</ul>`;
     if (attachments.length > 0) html += `<p>📎 <i>Fichier(s) .ics joint(s) — cliquez pour ajouter à Google Calendar</i></p>`;
   }
-
   if (removedRes.length > 0) {
     html += `<h3>❌ Réservations annulées :</h3><ul>`;
     for (const r of removedRes) html += `<li>📅 <b>${r.debut}</b> → <b>${r.fin}</b></li>`;
     html += `</ul>`;
   }
-
-  html += `<h3>📋 Toutes les réservations (mois en cours + 3 suivants) :</h3><ul>`;
+  html += `<h3>📋 Toutes les réservations (4 mois) :</h3><ul>`;
   for (const r of allReservations) {
     const emoji = r.etat.includes("cours") ? "🟠" : r.etat.includes("attente") ? "🟡" : "✅";
     html += `<li>${emoji} ${r.debut} → ${r.fin} (${r.nuits} nuit${r.nuits > 1 ? 's' : ''}) — ${r.etat}</li>`;
@@ -148,9 +111,7 @@ async function sendEmail(previousText, currentText, allReservations) {
 
   await transporter.sendMail({
     from: EMAIL_FROM, to: EMAIL_TO,
-    subject: newRes.length > 0
-      ? `🆕 Nouvelle réservation : ${newRes[0].debut} → ${newRes[0].fin}`
-      : `🔔 Passpass - Modification détectée`,
+    subject: newRes.length > 0 ? `🆕 Nouvelle réservation : ${newRes[0].debut} → ${newRes[0].fin}` : `🔔 Passpass - Modification détectée`,
     html, attachments,
   });
   console.log(`✅ Email envoyé avec ${attachments.length} fichier(s) .ics`);
@@ -194,7 +155,6 @@ async function scrapePasspass() {
     await login(page);
     console.log("✅ Connecté !");
 
-    // Clique sur la propriété
     await page.evaluate(() => {
       const els = Array.from(document.querySelectorAll("*"));
       const el = els.find(e => e.innerText?.trim().includes("Le jardin d'Henri") && e.children.length === 0);
@@ -202,28 +162,68 @@ async function scrapePasspass() {
     });
     await new Promise(r => setTimeout(r, 4000));
 
-    // Mois en cours
+    // Log complet pour debug
     const currentContent = await page.evaluate(() => {
       const body = document.body.cloneNode(true);
       body.querySelectorAll("script, style").forEach(el => el.remove());
       return body.innerText;
     });
-    console.log(`📁 Mois en cours: ${currentContent.length} caractères`);
-    const currentRes = parseReservations(currentContent);
-    console.log(`📅 Mois en cours: ${currentRes.length} réservation(s)`);
-    currentRes.forEach(r => console.log(`   ${r.debut} → ${r.fin} (${r.nuits} nuits) — ${r.etat}`));
+    console.log("=== CONTENU COMPLET ===");
+    console.log(currentContent);
+    console.log("=== FIN CONTENU ===");
 
-    // 3 mois suivants
-    const nextMonths = getNextMonths(3);
-    console.log(`\n📆 Navigation vers les mois suivants: ${nextMonths.join(", ")}`);
+    // Liste tous les liens/boutons pour trouver les mois
+    const allLinks = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll("a, button, li, [class*='dropdown'] *"))
+        .map(e => e.innerText?.trim())
+        .filter(t => t && t.length > 0 && t.length < 30);
+    });
+    console.log("=== LIENS/BOUTONS DISPONIBLES ===");
+    console.log([...new Set(allLinks)].join("\n"));
+    console.log("=== FIN LIENS ===");
+
+    const currentRes = parseReservations(currentContent);
     let allReservations = [...currentRes];
 
+    // Navigue vers les 3 mois suivants via le bouton "suivant" du calendrier
+    const nextMonths = getNextMonths(3);
     for (const month of nextMonths) {
-      const res = await getReservationsForMonth(page, month);
-      allReservations = [...allReservations, ...res];
+      console.log(`\n📆 Tentative navigation: "${month}"`);
+
+      // Essaie de cliquer sur la flèche "suivant" du calendrier
+      const clicked = await page.evaluate((monthLabel) => {
+        // Cherche dans tous les éléments
+        const all = Array.from(document.querySelectorAll("*"));
+        const el = all.find(e => e.innerText?.trim() === monthLabel && e.children.length <= 2);
+        if (el) { el.click(); return `trouvé: ${el.tagName}.${el.className}`; }
+
+        // Cherche la flèche suivante
+        const arrows = document.querySelectorAll("[class*='next'], [class*='arrow'], [class*='chevron'], button");
+        for (const a of arrows) {
+          if (a.innerHTML.includes('>') || a.innerHTML.includes('›') || a.innerHTML.includes('→')) {
+            a.click();
+            return `flèche cliquée: ${a.tagName}`;
+          }
+        }
+        return null;
+      }, month);
+
+      console.log(`   Résultat clic: ${clicked}`);
+      await new Promise(r => setTimeout(r, 3000));
+
+      const monthContent = await page.evaluate(() => {
+        const body = document.body.cloneNode(true);
+        body.querySelectorAll("script, style").forEach(el => el.remove());
+        return body.innerText;
+      });
+
+      const monthRes = parseReservations(monthContent);
+      console.log(`   ${monthRes.length} réservation(s) trouvée(s)`);
+      monthRes.forEach(r => console.log(`   ${r.debut} → ${r.fin} (${r.nuits} nuits)`));
+      allReservations = [...allReservations, ...monthRes];
     }
 
-    // Déduplique les réservations
+    // Déduplique
     const seen = new Set();
     allReservations = allReservations.filter(r => {
       const key = `${r.debut}-${r.fin}`;
@@ -250,13 +250,13 @@ async function main() {
     if ("dashboard" in previousState) {
       if (previousState.dashboard.hash !== currentHash) {
         console.log("🔄 CHANGEMENT détecté !");
-        await sendEmail(previousState.dashboard.content || "", currentContent, allReservations);
+        await sendEmail(previousState.dashboard.allReservations || [], allReservations);
       } else {
         console.log("✅ Aucun changement détecté");
       }
     } else {
       console.log("🆕 Première observation — email récapitulatif envoyé");
-      await sendEmail("", currentContent, allReservations);
+      await sendEmail([], allReservations);
     }
 
     saveState({ dashboard: { hash: currentHash, content: currentContent, allReservations } });
