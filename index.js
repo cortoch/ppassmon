@@ -24,7 +24,6 @@ function parseReservations(text) {
     .filter(l => l.length > 0);
 
   for (let i = 0; i < lines.length - 1; i++) {
-    // Format: "12 mars - 15 mars" ou "12 mars 2026 - 15 mars 2026"
     const dateMatch = lines[i].match(/^(\d{1,2}\s+\w+(?:\s+\d{4})?)\s*[-–]\s*(\d{1,2}\s+\w+(?:\s+\d{4})?)$/);
     if (dateMatch) {
       const nuits = lines[i + 1]?.match(/^\d+$/) ? lines[i + 1].trim() : "?";
@@ -32,21 +31,17 @@ function parseReservations(text) {
       reservations.push({ debut: dateMatch[1].trim(), fin: dateMatch[2].trim(), nuits, etat: etat.trim() });
       continue;
     }
-
-    // Format: "12/03/2026 - 15/03/2026" ou "12/03 - 15/03"
     const dateMatchSlash = lines[i].match(/^(\d{1,2}\/\d{1,2}(?:\/\d{4})?)\s*[-–]\s*(\d{1,2}\/\d{1,2}(?:\/\d{4})?)$/);
     if (dateMatchSlash) {
       const nuits = lines[i + 1]?.match(/^\d+$/) ? lines[i + 1].trim() : "?";
       const etat = lines[i + 2]?.match(/^\d+$/) ? lines[i + 3] || "" : lines[i + 2] || "";
       reservations.push({ debut: dateMatchSlash[1].trim(), fin: dateMatchSlash[2].trim(), nuits, etat: etat.trim() });
-      continue;
     }
   }
   return reservations;
 }
 
 function parseDate(str) {
-  // Format "dd mois yyyy" ou "dd mois"
   const mois = {
     "janvier": 0, "février": 1, "fevrier": 1, "mars": 2, "avril": 3,
     "mai": 4, "juin": 5, "juillet": 6, "août": 7, "aout": 7,
@@ -57,8 +52,6 @@ function parseDate(str) {
   const moisNum = mois[parts[1]];
   const annee = parts[2] ? parseInt(parts[2]) : new Date().getFullYear();
   if (!isNaN(jour) && moisNum !== undefined) return new Date(annee, moisNum, jour);
-
-  // Format "dd/mm/yyyy" ou "dd/mm"
   const slashMatch = str.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?$/);
   if (slashMatch) {
     return new Date(
@@ -97,7 +90,6 @@ async function clickNextMonth(page) {
              (html.includes("svg") && !b.closest("a") && buttons.indexOf(b) > 0);
     });
     if (nextBtn) { nextBtn.click(); return true; }
-
     const allBtns = buttons.filter(b => b.innerText?.trim().length <= 2);
     if (allBtns.length >= 2) { allBtns[1].click(); return true; }
     return false;
@@ -107,8 +99,6 @@ async function clickNextMonth(page) {
 
 async function getMonthReservations(page, label, screenshotIndex) {
   await new Promise(r => setTimeout(r, 3000));
-
-  // Screenshot pour debug
   await page.screenshot({ path: `screenshot_${screenshotIndex}.png`, fullPage: true });
 
   const content = await page.evaluate(() => {
@@ -117,7 +107,6 @@ async function getMonthReservations(page, label, screenshotIndex) {
     return body.innerText;
   });
 
-  // Log du contenu brut pour debug (premiers 3000 caractères)
   console.log(`\n--- CONTENU BRUT (${label}) ---`);
   console.log(content.substring(0, 3000));
   console.log(`--- FIN CONTENU BRUT ---\n`);
@@ -199,6 +188,67 @@ async function login(page) {
   if (page.url().includes("login")) throw new Error("Connexion échouée");
 }
 
+async function navigateToProperty(page) {
+  console.log(`📍 URL actuelle: ${page.url()}`);
+  await page.screenshot({ path: "screenshot_before_click.png", fullPage: true });
+
+  // Attendre que "Le jardin d'Henri" soit visible
+  await page.waitForFunction(() => {
+    return document.body.innerText.includes("Le jardin d'Henri");
+  }, { timeout: 10000 });
+
+  // Loguer tous les liens pour debug
+  const linksInfo = await page.evaluate(() => {
+    return Array.from(document.querySelectorAll("a")).map(a => ({
+      text: a.innerText?.trim().substring(0, 50),
+      href: a.href
+    }));
+  });
+  console.log("🔗 Liens trouvés:", JSON.stringify(linksInfo.slice(0, 20), null, 2));
+
+  // Essai 1 : cliquer sur un lien <a> contenant "Le jardin d'Henri"
+  let clicked = await page.evaluate(() => {
+    const links = Array.from(document.querySelectorAll("a"));
+    const link = links.find(a => a.innerText?.includes("Le jardin d'Henri"));
+    if (link) { link.click(); return `lien <a>: ${link.href}`; }
+    return null;
+  });
+
+  if (!clicked) {
+    // Essai 2 : cliquer sur le conteneur cliquable le plus proche du texte
+    clicked = await page.evaluate(() => {
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      let node;
+      while ((node = walker.nextNode())) {
+        if (node.textContent.includes("Le jardin d'Henri")) {
+          // Remonte jusqu'à un élément cliquable
+          let el = node.parentElement;
+          for (let i = 0; i < 5; i++) {
+            if (!el) break;
+            const style = window.getComputedStyle(el);
+            if (style.cursor === "pointer" || el.tagName === "A" || el.tagName === "BUTTON" || el.onclick) {
+              el.click();
+              return `élément cliquable: ${el.tagName}.${el.className}`;
+            }
+            el = el.parentElement;
+          }
+          // Si rien de cliquable trouvé, clique sur le parent direct
+          if (node.parentElement) {
+            node.parentElement.click();
+            return `parent direct: ${node.parentElement.tagName}`;
+          }
+        }
+      }
+      return null;
+    });
+  }
+
+  console.log(`🏠 Navigation vers Le jardin d'Henri: ${clicked || "❌ rien trouvé"}`);
+  await new Promise(r => setTimeout(r, 5000));
+  console.log(`📍 URL après clic: ${page.url()}`);
+  await page.screenshot({ path: "screenshot_after_click.png", fullPage: true });
+}
+
 async function scrapePasspass() {
   console.log(`🔍 Vérification - ${new Date().toLocaleString("fr-FR")}`);
   const browser = await puppeteer.launch({
@@ -209,34 +259,19 @@ async function scrapePasspass() {
   });
   try {
     const page = await browser.newPage();
+
+    page.on("framenavigated", frame => {
+      if (frame === page.mainFrame()) console.log(`🌐 Navigation: ${frame.url()}`);
+    });
+
     await login(page);
     console.log("✅ Connecté !");
 
-    // Screenshot juste après login pour vérifier où on est
-    await page.screenshot({ path: "screenshot_login.png", fullPage: true });
-    console.log(`📍 URL après login: ${page.url()}`);
+    await navigateToProperty(page);
 
-    // Navigation explicite vers le dashboard
-    await page.goto("https://client.passpass.io/dashboard", { waitUntil: "networkidle2", timeout: 30000 });
-    await new Promise(r => setTimeout(r, 3000));
-    console.log(`📍 URL dashboard: ${page.url()}`);
-    await page.screenshot({ path: "screenshot_dashboard.png", fullPage: true });
-
-    // Cherche et clique sur "Le jardin d'Henri" si plusieurs propriétés
-    const clicked = await page.evaluate(() => {
-      const els = Array.from(document.querySelectorAll("*"));
-      const el = els.find(e => e.innerText?.trim() === "Le jardin d'Henri" || e.innerText?.trim().includes("Le jardin d'Henri"));
-      if (el) { el.click(); return true; }
-      return false;
-    });
-    console.log(`🏠 Clic sur "Le jardin d'Henri": ${clicked ? "✅" : "❌ (non trouvé, peut-être déjà sélectionné)"}`);
-    await new Promise(r => setTimeout(r, 4000));
-
-    // Mois en cours
     const currentRes = await getMonthReservations(page, "Mois en cours", 0);
     let allReservations = [...currentRes];
 
-    // 3 mois suivants via la flèche >
     for (let i = 1; i <= 3; i++) {
       const clicked = await clickNextMonth(page);
       console.log(`📆 Flèche > cliquée (mois +${i}): ${clicked ? "✅" : "❌"}`);
@@ -244,7 +279,6 @@ async function scrapePasspass() {
       allReservations = [...allReservations, ...monthRes];
     }
 
-    // Déduplique
     const seen = new Set();
     allReservations = allReservations.filter(r => {
       const key = `${r.debut}-${r.fin}`;
