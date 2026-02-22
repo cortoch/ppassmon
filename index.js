@@ -22,18 +22,31 @@ function parseReservations(text) {
   const lines = text.split("\n")
     .map(l => l.replace(/\s+/g, " ").trim())
     .filter(l => l.length > 0);
+
   for (let i = 0; i < lines.length - 1; i++) {
-    const dateMatch = lines[i].match(/^(\d{1,2}\s+\w+(?:\s+\d{4})?)\s*-\s*(\d{1,2}\s+\w+(?:\s+\d{4})?)$/);
+    // Format: "12 mars - 15 mars" ou "12 mars 2026 - 15 mars 2026"
+    const dateMatch = lines[i].match(/^(\d{1,2}\s+\w+(?:\s+\d{4})?)\s*[-–]\s*(\d{1,2}\s+\w+(?:\s+\d{4})?)$/);
     if (dateMatch) {
       const nuits = lines[i + 1]?.match(/^\d+$/) ? lines[i + 1].trim() : "?";
       const etat = lines[i + 2]?.match(/^\d+$/) ? lines[i + 3] || "" : lines[i + 2] || "";
       reservations.push({ debut: dateMatch[1].trim(), fin: dateMatch[2].trim(), nuits, etat: etat.trim() });
+      continue;
+    }
+
+    // Format: "12/03/2026 - 15/03/2026" ou "12/03 - 15/03"
+    const dateMatchSlash = lines[i].match(/^(\d{1,2}\/\d{1,2}(?:\/\d{4})?)\s*[-–]\s*(\d{1,2}\/\d{1,2}(?:\/\d{4})?)$/);
+    if (dateMatchSlash) {
+      const nuits = lines[i + 1]?.match(/^\d+$/) ? lines[i + 1].trim() : "?";
+      const etat = lines[i + 2]?.match(/^\d+$/) ? lines[i + 3] || "" : lines[i + 2] || "";
+      reservations.push({ debut: dateMatchSlash[1].trim(), fin: dateMatchSlash[2].trim(), nuits, etat: etat.trim() });
+      continue;
     }
   }
   return reservations;
 }
 
 function parseDate(str) {
+  // Format "dd mois yyyy" ou "dd mois"
   const mois = {
     "janvier": 0, "février": 1, "fevrier": 1, "mars": 2, "avril": 3,
     "mai": 4, "juin": 5, "juillet": 6, "août": 7, "aout": 7,
@@ -43,8 +56,18 @@ function parseDate(str) {
   const jour = parseInt(parts[0]);
   const moisNum = mois[parts[1]];
   const annee = parts[2] ? parseInt(parts[2]) : new Date().getFullYear();
-  if (isNaN(jour) || moisNum === undefined) return null;
-  return new Date(annee, moisNum, jour);
+  if (!isNaN(jour) && moisNum !== undefined) return new Date(annee, moisNum, jour);
+
+  // Format "dd/mm/yyyy" ou "dd/mm"
+  const slashMatch = str.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?$/);
+  if (slashMatch) {
+    return new Date(
+      slashMatch[3] ? parseInt(slashMatch[3]) : new Date().getFullYear(),
+      parseInt(slashMatch[2]) - 1,
+      parseInt(slashMatch[1])
+    );
+  }
+  return null;
 }
 
 function toICalDate(date) {
@@ -63,10 +86,8 @@ function createICS(reservation) {
 }
 
 async function clickNextMonth(page) {
-  // Clique sur la flèche > à droite du calendrier
   const clicked = await page.evaluate(() => {
     const buttons = Array.from(document.querySelectorAll("button"));
-    // La flèche > est un bouton avec ">" ou "›" ou une icône chevron
     const nextBtn = buttons.find(b => {
       const text = b.innerText?.trim();
       const html = b.innerHTML;
@@ -77,7 +98,6 @@ async function clickNextMonth(page) {
     });
     if (nextBtn) { nextBtn.click(); return true; }
 
-    // Fallback : le 2ème bouton sur la page (< et > sont souvent les 2 premiers)
     const allBtns = buttons.filter(b => b.innerText?.trim().length <= 2);
     if (allBtns.length >= 2) { allBtns[1].click(); return true; }
     return false;
@@ -85,13 +105,23 @@ async function clickNextMonth(page) {
   return clicked;
 }
 
-async function getMonthReservations(page, label) {
+async function getMonthReservations(page, label, screenshotIndex) {
   await new Promise(r => setTimeout(r, 3000));
+
+  // Screenshot pour debug
+  await page.screenshot({ path: `screenshot_${screenshotIndex}.png`, fullPage: true });
+
   const content = await page.evaluate(() => {
     const body = document.body.cloneNode(true);
     body.querySelectorAll("script, style").forEach(el => el.remove());
     return body.innerText;
   });
+
+  // Log du contenu brut pour debug (premiers 3000 caractères)
+  console.log(`\n--- CONTENU BRUT (${label}) ---`);
+  console.log(content.substring(0, 3000));
+  console.log(`--- FIN CONTENU BRUT ---\n`);
+
   const res = parseReservations(content);
   console.log(`📅 ${label}: ${res.length} réservation(s)`);
   res.forEach(r => console.log(`   ${r.debut} → ${r.fin} (${r.nuits} nuits) — ${r.etat}`));
@@ -182,22 +212,35 @@ async function scrapePasspass() {
     await login(page);
     console.log("✅ Connecté !");
 
-    await page.evaluate(() => {
+    // Screenshot juste après login pour vérifier où on est
+    await page.screenshot({ path: "screenshot_login.png", fullPage: true });
+    console.log(`📍 URL après login: ${page.url()}`);
+
+    // Navigation explicite vers le dashboard
+    await page.goto("https://client.passpass.io/dashboard", { waitUntil: "networkidle2", timeout: 30000 });
+    await new Promise(r => setTimeout(r, 3000));
+    console.log(`📍 URL dashboard: ${page.url()}`);
+    await page.screenshot({ path: "screenshot_dashboard.png", fullPage: true });
+
+    // Cherche et clique sur "Le jardin d'Henri" si plusieurs propriétés
+    const clicked = await page.evaluate(() => {
       const els = Array.from(document.querySelectorAll("*"));
-      const el = els.find(e => e.innerText?.trim().includes("Le jardin d'Henri") && e.children.length === 0);
-      if (el) el.click();
+      const el = els.find(e => e.innerText?.trim() === "Le jardin d'Henri" || e.innerText?.trim().includes("Le jardin d'Henri"));
+      if (el) { el.click(); return true; }
+      return false;
     });
+    console.log(`🏠 Clic sur "Le jardin d'Henri": ${clicked ? "✅" : "❌ (non trouvé, peut-être déjà sélectionné)"}`);
     await new Promise(r => setTimeout(r, 4000));
 
     // Mois en cours
-    const currentRes = await getMonthReservations(page, "Mois en cours");
+    const currentRes = await getMonthReservations(page, "Mois en cours", 0);
     let allReservations = [...currentRes];
 
     // 3 mois suivants via la flèche >
     for (let i = 1; i <= 3; i++) {
       const clicked = await clickNextMonth(page);
       console.log(`📆 Flèche > cliquée (mois +${i}): ${clicked ? "✅" : "❌"}`);
-      const monthRes = await getMonthReservations(page, `Mois +${i}`);
+      const monthRes = await getMonthReservations(page, `Mois +${i}`, i);
       allReservations = [...allReservations, ...monthRes];
     }
 
