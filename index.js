@@ -34,7 +34,6 @@ function daysBetween(iso1, iso2) {
   return Math.round((new Date(iso2) - new Date(iso1)) / 86400000);
 }
 
-// Reconstruit les plages continues depuis la liste des jours avec isEvent
 function buildRangesFromDays(isoDates) {
   if (!isoDates.length) return [];
   const sorted = [...new Set(isoDates)].sort();
@@ -43,8 +42,7 @@ function buildRangesFromDays(isoDates) {
   let prev = sorted[0];
 
   for (let i = 1; i < sorted.length; i++) {
-    const expected = addDays(prev, 1);
-    if (sorted[i] === expected) {
+    if (sorted[i] === addDays(prev, 1)) {
       prev = sorted[i];
     } else {
       ranges.push({ debut: start, fin: prev });
@@ -56,7 +54,6 @@ function buildRangesFromDays(isoDates) {
   return ranges;
 }
 
-// Pour le mois courant : parse le tableau texte (contient l'état)
 function parseReservationsFromText(text) {
   const reservations = [];
   const lines = text.split("\n")
@@ -117,7 +114,6 @@ async function getMonthReservations(page, label, screenshotIndex, useTextParser)
   let reservations = [];
 
   if (useTextParser) {
-    // Mois courant : tableau texte avec états
     const content = await page.evaluate(() => {
       const body = document.body.cloneNode(true);
       body.querySelectorAll("script, style").forEach(el => el.remove());
@@ -126,14 +122,29 @@ async function getMonthReservations(page, label, screenshotIndex, useTextParser)
     const sectionMatch = content.match(/Réservation[\s\S]*?(?=Bilan du mois|$)/);
     reservations = parseReservationsFromText(sectionMatch ? sectionMatch[0] : content);
   } else {
-    // Mois futurs : on lit toutes les cellules avec la classe isEvent
-    const isoDates = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll(".fc-daygrid-day.isEvent[data-date]"))
-        .map(el => el.getAttribute("data-date"))
-        .filter(Boolean);
+    // Log TOUTES les cellules du calendrier avec leur date et classes
+    const allCells = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll(".fc-daygrid-day[data-date]"))
+        .map(el => ({
+          date: el.getAttribute("data-date"),
+          classes: el.className,
+          // Regarde aussi les éléments enfants pour voir ce qui est coloré
+          hasColoredChild: !!el.querySelector("[style*='background-color']:not([style*='rgb(255'])"),
+          childStyles: Array.from(el.querySelectorAll("[style*='background']")).map(c => c.style.backgroundColor).join("|"),
+        }));
     });
 
-    console.log(`  📅 Jours occupés: ${isoDates.join(", ")}`);
+    // Log pour debug
+    const occupied = allCells.filter(c => c.classes.includes("isEvent") || c.hasColoredChild || c.childStyles);
+    console.log(`  📅 Toutes cellules occupées (${occupied.length}):`);
+    occupied.forEach(c => console.log(`    ${c.date}: classes="${c.classes.trim()}" childStyles="${c.childStyles}"`));
+
+    // Collecte les dates : isEvent + toute cellule avec un enfant coloré non-blanc
+    const isoDates = allCells
+      .filter(c => c.classes.includes("isEvent") || (c.childStyles && !c.childStyles.includes("255, 255, 255")))
+      .map(c => c.date);
+
+    console.log(`  📅 Jours retenus: ${isoDates.join(", ")}`);
 
     const ranges = buildRangesFromDays(isoDates);
     reservations = ranges.map(r => ({
@@ -277,7 +288,6 @@ async function scrapePasspass() {
       allReservations = [...allReservations, ...monthRes];
     }
 
-    // Déduplique par clé debut-fin
     const seen = new Set();
     allReservations = allReservations.filter(r => {
       const key = `${r.debut}-${r.fin}`;
