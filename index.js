@@ -17,34 +17,61 @@ function loadState() {
 }
 function saveState(state) { fs.writeFileSync(CACHE_FILE, JSON.stringify(state, null, 2)); }
 
-// Extrait les réservations depuis les événements FullCalendar dans le DOM
-function parseReservationsFromCalendar(calHtml) {
+const MOIS_FR = ["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"];
+
+function isoToFr(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  return `${d} ${MOIS_FR[m-1]} ${y}`;
+}
+
+function addDays(iso, n) {
+  const d = new Date(iso);
+  d.setDate(d.getDate() + n);
+  return d.toISOString().split("T")[0];
+}
+
+function daysBetween(iso1, iso2) {
+  return Math.round((new Date(iso2) - new Date(iso1)) / 86400000);
+}
+
+// Reconstruit les plages continues depuis la liste des jours avec isEvent
+function buildRangesFromDays(isoDates) {
+  if (!isoDates.length) return [];
+  const sorted = [...new Set(isoDates)].sort();
+  const ranges = [];
+  let start = sorted[0];
+  let prev = sorted[0];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const expected = addDays(prev, 1);
+    if (sorted[i] === expected) {
+      prev = sorted[i];
+    } else {
+      ranges.push({ debut: start, fin: prev });
+      start = sorted[i];
+      prev = sorted[i];
+    }
+  }
+  ranges.push({ debut: start, fin: prev });
+  return ranges;
+}
+
+// Pour le mois courant : parse le tableau texte (contient l'état)
+function parseReservationsFromText(text) {
   const reservations = [];
+  const lines = text.split("\n")
+    .map(l => l.replace(/\s+/g, " ").trim())
+    .filter(l => l.length > 0);
 
-  // FullCalendar encode les événements dans des éléments avec data-date ou des classes fc-event
-  // On cherche les plages de dates colorées : fc-event, fc-daygrid-event, etc.
-  // Les titres d'événements sont dans .fc-event-title ou data-* attributes
-
-  // Regex pour trouver les événements dans le HTML
-  // Format typique: <a class="fc-event ..."><div class="fc-event-title">Texte</div></a>
-  const eventTitleRegex = /fc-event-title[^>]*>([^<]+)</g;
-  const titles = [];
-  let m;
-  while ((m = eventTitleRegex.exec(calHtml)) !== null) {
-    titles.push(m[1].trim());
+  for (let i = 0; i < lines.length - 1; i++) {
+    const dateMatch = lines[i].match(/^(\d{1,2}\s+[^\d\s\-–]+(?:\s+\d{4})?)\s*[-–]\s*(\d{1,2}\s+[^\d\s\-–]+(?:\s+\d{4})?)$/);
+    if (dateMatch) {
+      const nuits = lines[i + 1]?.match(/^\d+$/) ? lines[i + 1].trim() : "?";
+      const etat = lines[i + 2]?.match(/^\d+$/) ? lines[i + 3] || "" : lines[i + 2] || "";
+      reservations.push({ debut: dateMatch[1].trim(), fin: dateMatch[2].trim(), nuits, etat: etat.trim() });
+    }
   }
-
-  // Format data-date sur les cellules
-  const dateRegex = /data-date="(\d{4}-\d{2}-\d{2})"/g;
-  const dates = [];
-  while ((m = dateRegex.exec(calHtml)) !== null) {
-    dates.push(m[1]);
-  }
-
-  console.log(`  🔍 Titres événements trouvés: ${JSON.stringify(titles)}`);
-  console.log(`  📅 Dates cellules trouvées: ${dates.slice(0, 10).join(", ")}...`);
-
-  return { titles, dates };
+  return reservations;
 }
 
 function parseDate(str) {
@@ -78,55 +105,48 @@ function createICS(reservation) {
 
 async function clickCalendarNext(page) {
   await page.evaluate(() => {
-    // Clique uniquement sur le bouton FullCalendar (fc-next-button)
-    const btn = document.querySelector(".fc-next-button");
-    if (btn) btn.click();
+    document.querySelector(".fc-next-button")?.click();
   });
   await new Promise(r => setTimeout(r, 2000));
 }
 
-async function getMonthReservations(page, label, screenshotIndex) {
+async function getMonthReservations(page, label, screenshotIndex, useTextParser) {
   await new Promise(r => setTimeout(r, 2000));
   await page.screenshot({ path: `screenshot_${screenshotIndex}.png`, fullPage: true });
 
-  // Récupère le HTML du calendrier FullCalendar uniquement
-  const calData = await page.evaluate(() => {
-    const cal = document.querySelector(".fc");
-    if (!cal) return { html: "", text: "", events: [] };
+  let reservations = [];
 
-    // Récupère les événements FullCalendar via les éléments fc-event
-    const events = Array.from(cal.querySelectorAll(".fc-event, .fc-daygrid-event")).map(el => ({
-      title: el.querySelector(".fc-event-title, .fc-title")?.innerText?.trim() || el.innerText?.trim(),
-      start: el.getAttribute("data-date") || el.closest("[data-date]")?.getAttribute("data-date"),
-      classes: el.className,
-      html: el.outerHTML.substring(0, 300),
+  if (useTextParser) {
+    // Mois courant : tableau texte avec états
+    const content = await page.evaluate(() => {
+      const body = document.body.cloneNode(true);
+      body.querySelectorAll("script, style").forEach(el => el.remove());
+      return body.innerText;
+    });
+    const sectionMatch = content.match(/Réservation[\s\S]*?(?=Bilan du mois|$)/);
+    reservations = parseReservationsFromText(sectionMatch ? sectionMatch[0] : content);
+  } else {
+    // Mois futurs : on lit toutes les cellules avec la classe isEvent
+    const isoDates = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll(".fc-daygrid-day.isEvent[data-date]"))
+        .map(el => el.getAttribute("data-date"))
+        .filter(Boolean);
+    });
+
+    console.log(`  📅 Jours occupés: ${isoDates.join(", ")}`);
+
+    const ranges = buildRangesFromDays(isoDates);
+    reservations = ranges.map(r => ({
+      debut: isoToFr(r.debut),
+      fin: isoToFr(r.fin),
+      nuits: String(daysBetween(r.debut, r.fin)),
+      etat: "À venir",
     }));
+  }
 
-    // Récupère aussi toutes les cellules avec data-date
-    const cells = Array.from(cal.querySelectorAll("[data-date]")).map(el => ({
-      date: el.getAttribute("data-date"),
-      hasEvent: el.querySelector(".fc-event") !== null,
-      classes: el.className,
-    })).filter(c => c.hasEvent);
-
-    return {
-      html: cal.outerHTML.substring(0, 5000),
-      text: cal.innerText,
-      events,
-      cells,
-    };
-  });
-
-  console.log(`\n--- CALENDRIER (${label}) ---`);
-  console.log(`Titre mois: ${calData.text?.split("\n")[0]}`);
-  console.log(`Événements fc-event (${calData.events?.length}):`, JSON.stringify(calData.events?.slice(0, 5), null, 2));
-  console.log(`Cellules avec événements (${calData.cells?.length}):`, JSON.stringify(calData.cells?.slice(0, 5), null, 2));
-  console.log(`HTML extrait:\n${calData.html?.substring(0, 2000)}`);
-  console.log(`--- FIN ---\n`);
-
-  // Pour l'instant retourne vide — on analysera le HTML pour construire le bon parser
-  console.log(`📅 ${label}: analyse en cours (voir logs HTML ci-dessus)`);
-  return [];
+  console.log(`📅 ${label}: ${reservations.length} réservation(s)`);
+  reservations.forEach(r => console.log(`   ${r.debut} → ${r.fin} (${r.nuits} nuits) — ${r.etat}`));
+  return reservations;
 }
 
 async function sendEmail(previousAllRes, allReservations) {
@@ -162,7 +182,7 @@ async function sendEmail(previousAllRes, allReservations) {
   }
   html += `<h3>📋 Toutes les réservations (4 mois) :</h3><ul>`;
   for (const r of allReservations) {
-    const emoji = r.etat.includes("cours") ? "🟠" : r.etat.includes("attente") ? "🟡" : "✅";
+    const emoji = r.etat.includes("cours") ? "🟠" : r.etat.includes("attente") ? "🟡" : r.etat.includes("venir") ? "🔵" : "✅";
     html += `<li>${emoji} ${r.debut} → ${r.fin} (${r.nuits} nuit${r.nuits > 1 ? 's' : ''}) — ${r.etat}</li>`;
   }
   html += `</ul><p><a href="https://client.passpass.io/dashboard">👉 Voir le dashboard</a></p>`;
@@ -247,17 +267,17 @@ async function scrapePasspass() {
     console.log("✅ Connecté !");
     await navigateToProperty(page);
 
-    // Mois en cours
-    let allReservations = await getMonthReservations(page, "Mois en cours", 0);
+    const currentRes = await getMonthReservations(page, "Mois en cours", 0, true);
+    let allReservations = [...currentRes];
 
-    // 3 mois suivants
     for (let i = 1; i <= 3; i++) {
       console.log(`\n📆 Passage au mois +${i}...`);
       await clickCalendarNext(page);
-      const monthRes = await getMonthReservations(page, `Mois +${i}`, i);
+      const monthRes = await getMonthReservations(page, `Mois +${i}`, i, false);
       allReservations = [...allReservations, ...monthRes];
     }
 
+    // Déduplique par clé debut-fin
     const seen = new Set();
     allReservations = allReservations.filter(r => {
       const key = `${r.debut}-${r.fin}`;
