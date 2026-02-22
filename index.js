@@ -24,8 +24,6 @@ function parseReservations(text) {
     .filter(l => l.length > 0);
 
   for (let i = 0; i < lines.length - 1; i++) {
-    // Format: "30 Janvier - 1 Février" (avec majuscules et accents)
-    // \w+ ne capture pas les caractères accentués — on utilise [^\d\s-–]+ à la place
     const dateMatch = lines[i].match(/^(\d{1,2}\s+[^\d\s\-–]+(?:\s+\d{4})?)\s*[-–]\s*(\d{1,2}\s+[^\d\s\-–]+(?:\s+\d{4})?)$/);
     if (dateMatch) {
       const nuits = lines[i + 1]?.match(/^\d+$/) ? lines[i + 1].trim() : "?";
@@ -65,43 +63,36 @@ function createICS(reservation) {
   return `BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//Passpass Monitor//FR\nCALSCALE:GREGORIAN\nMETHOD:PUBLISH\nBEGIN:VEVENT\nUID:${uid}\nDTSTAMP:${now}\nDTSTART;VALUE=DATE:${toICalDate(debut)}\nDTEND;VALUE=DATE:${toICalDate(finExclusive)}\nSUMMARY:🏠 Réservation Le jardin d'Henri (${reservation.nuits} nuit${reservation.nuits > 1 ? 's' : ''})\nDESCRIPTION:Réservation du ${reservation.debut} au ${reservation.fin}\\n${reservation.nuits} nuit${reservation.nuits > 1 ? 's' : ''}\\nÉtat: ${reservation.etat}\nLOCATION:Le jardin d'Henri\nBEGIN:VALARM\nTRIGGER:-PT24H\nACTION:DISPLAY\nDESCRIPTION:Rappel : arrivée demain - Le jardin d'Henri\nEND:VALARM\nEND:VEVENT\nEND:VCALENDAR`;
 }
 
-async function clickNextMonth(page) {
-  // Le calendrier change de mois via des boutons de navigation.
-  // On identifie le bouton "suivant" dans le contexte du calendrier uniquement.
-  const clicked = await page.evaluate(() => {
-    const buttons = Array.from(document.querySelectorAll("button"));
+// Clique sur la flèche › du calendrier ET sur celle du dropdown "Réservations du mois"
+async function goToNextMonth(page) {
+  const result = await page.evaluate(() => {
+    const buttons = Array.from(document.querySelectorAll("button, [role='button']"));
+    const results = [];
 
-    // Cherche un bouton avec SVG chevron-right ou texte > / ›
-    const nextBtn = buttons.find(b => {
-      const text = b.innerText?.trim();
+    // Trouve TOUS les boutons "suivant" (flèches ›) sur la page
+    const nextBtns = buttons.filter(b => {
       const html = b.innerHTML;
+      const text = b.innerText?.trim();
       return text === ">" || text === "›" || text === "→" ||
              html.includes("chevron-right") || html.includes("angle-right") ||
-             html.includes("fa-chevron-right") || html.includes("fa-angle-right");
+             html.includes("fa-chevron-right") || html.includes("fa-angle-right") ||
+             (html.includes("svg") && b.querySelector("path, polyline, polygon"));
     });
-    if (nextBtn) { nextBtn.click(); return `bouton texte/icône: "${nextBtn.innerText?.trim()}"`; }
 
-    // Fallback : cherche dans le contexte du calendrier (élément contenant les jours LU MA ME...)
-    const calendarEl = Array.from(document.querySelectorAll("*")).find(el =>
-      el.innerText?.includes("LU") && el.innerText?.includes("MA") && el.innerText?.includes("ME")
-    );
-    if (calendarEl) {
-      const btns = Array.from(calendarEl.querySelectorAll("button, [role='button'], svg"));
-      // Prend le dernier bouton (généralement "suivant")
-      if (btns.length > 0) {
-        btns[btns.length - 1].click();
-        return `dernier btn dans calendrier`;
-      }
+    // Clique sur tous les boutons "suivant" trouvés (calendrier + dropdown)
+    for (const btn of nextBtns) {
+      btn.click();
+      results.push(btn.closest("[class]")?.className?.substring(0, 60) || btn.tagName);
     }
-
-    return null;
+    return results;
   });
-  return clicked;
+
+  console.log(`  ➡️  Boutons cliqués (${result.length}): ${result.join(" | ")}`);
+  await new Promise(r => setTimeout(r, 2000));
 }
 
 async function getMonthReservations(page, label, screenshotIndex) {
-  // Attendre que le contenu du mois soit chargé
-  await new Promise(r => setTimeout(r, 2000));
+  await new Promise(r => setTimeout(r, 1500));
   await page.screenshot({ path: `screenshot_${screenshotIndex}.png`, fullPage: true });
 
   const content = await page.evaluate(() => {
@@ -110,12 +101,8 @@ async function getMonthReservations(page, label, screenshotIndex) {
     return body.innerText;
   });
 
-  // Extrait seulement la section réservations (entre "Réservation" et "Bilan")
   const sectionMatch = content.match(/Réservation[\s\S]*?(?=Bilan du mois|$)/);
   const section = sectionMatch ? sectionMatch[0] : content;
-  console.log(`\n--- SECTION RÉSERVATIONS (${label}) ---`);
-  console.log(section.substring(0, 1500));
-  console.log(`--- FIN ---\n`);
 
   const res = parseReservations(section);
   console.log(`📅 ${label}: ${res.length} réservation(s)`);
@@ -199,7 +186,7 @@ async function navigateToProperty(page) {
     return document.body.innerText.includes("Le jardin d'Henri");
   }, { timeout: 10000 });
 
-  const clicked = await page.evaluate(() => {
+  await page.evaluate(() => {
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     let node;
     while ((node = walker.nextNode())) {
@@ -208,21 +195,19 @@ async function navigateToProperty(page) {
         for (let i = 0; i < 5; i++) {
           if (!el) break;
           const style = window.getComputedStyle(el);
-          if (style.cursor === "pointer" || el.tagName === "A" || el.tagName === "BUTTON" || el.onclick) {
-            el.click();
-            return `${el.tagName}.${el.className}`;
+          if (style.cursor === "pointer" || el.tagName === "A" || el.tagName === "BUTTON") {
+            el.click(); return;
           }
           el = el.parentElement;
         }
-        if (node.parentElement) { node.parentElement.click(); return `parent: ${node.parentElement.tagName}`; }
+        node.parentElement?.click();
+        return;
       }
     }
-    return null;
   });
 
-  console.log(`🏠 Navigation vers Le jardin d'Henri: ${clicked || "❌"}`);
   await new Promise(r => setTimeout(r, 5000));
-  console.log(`📍 URL après clic: ${page.url()}`);
+  console.log(`📍 URL dashboard: ${page.url()}`);
 }
 
 async function scrapePasspass() {
@@ -243,17 +228,19 @@ async function scrapePasspass() {
     console.log("✅ Connecté !");
     await navigateToProperty(page);
 
+    // Mois en cours
     const currentRes = await getMonthReservations(page, "Mois en cours", 0);
     let allReservations = [...currentRes];
 
+    // 3 mois suivants : avance les DEUX contrôles en même temps
     for (let i = 1; i <= 3; i++) {
-      const clicked = await clickNextMonth(page);
-      console.log(`📆 Flèche > cliquée (mois +${i}): ${clicked ? `✅ ${clicked}` : "❌"}`);
-      await new Promise(r => setTimeout(r, 2000));
+      console.log(`\n📆 Passage au mois +${i}...`);
+      await goToNextMonth(page);
       const monthRes = await getMonthReservations(page, `Mois +${i}`, i);
       allReservations = [...allReservations, ...monthRes];
     }
 
+    // Déduplique
     const seen = new Set();
     allReservations = allReservations.filter(r => {
       const key = `${r.debut}-${r.fin}`;
