@@ -97,6 +97,23 @@ function createICS(reservation) {
   return `BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//Passpass Monitor//FR\nCALSCALE:GREGORIAN\nMETHOD:PUBLISH\nBEGIN:VEVENT\nUID:${uid}\nDTSTAMP:${now}\nDTSTART;VALUE=DATE:${toICalDate(debut)}\nDTEND;VALUE=DATE:${toICalDate(finExclusive)}\nSUMMARY:🏠 Réservation Le jardin d'Henri (${reservation.nuits} nuit${reservation.nuits > 1 ? 's' : ''})\nDESCRIPTION:Réservation du ${reservation.debut} au ${reservation.fin}\\n${reservation.nuits} nuit${reservation.nuits > 1 ? 's' : ''}\\nÉtat: ${reservation.etat}\nLOCATION:Le jardin d'Henri\nBEGIN:VALARM\nTRIGGER:-PT24H\nACTION:DISPLAY\nDESCRIPTION:Rappel : arrivée demain - Le jardin d'Henri\nEND:VALARM\nEND:VEVENT\nEND:VCALENDAR`;
 }
 
+function buildGCalLink(reservation) {
+  const debut = parseDate(reservation.debut);
+  const fin = parseDate(reservation.fin);
+  if (!debut || !fin) return null;
+  const finExclusive = new Date(fin);
+  finExclusive.setDate(finExclusive.getDate() + 1);
+  const fmt = d => `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}`;
+  const params = new URLSearchParams({
+    action: "TEMPLATE",
+    text: `🏠 Réservation Le jardin d'Henri (${reservation.nuits} nuit${reservation.nuits > 1 ? "s" : ""})`,
+    dates: `${fmt(debut)}/${fmt(finExclusive)}`,
+    details: `Réservation du ${reservation.debut} au ${reservation.fin}\n${reservation.nuits} nuits\nÉtat: ${reservation.etat}`,
+    location: "Le jardin d'Henri",
+  });
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+}
+
 async function clickCalendarNext(page) {
   await page.evaluate(() => { document.querySelector(".fc-next-button")?.click(); });
   await new Promise(r => setTimeout(r, 2000));
@@ -173,7 +190,12 @@ async function sendEmail(previousAllRes, allReservations) {
   let html = `<h2>🔔 Modification détectée sur Passpass</h2><p><strong>Date :</strong> ${now}</p>`;
   if (newRes.length > 0) {
     html += `<h3>🆕 Nouvelles réservations :</h3><ul>`;
-    for (const r of newRes) html += `<li>📅 <b>${r.debut}</b> → <b>${r.fin}</b> (${r.nuits} nuit${r.nuits > 1 ? 's' : ''}) — ${r.etat}</li>`;
+    for (const r of newRes) {
+      const gcalLink = buildGCalLink(r);
+      html += `<li>📅 <b>${r.debut}</b> → <b>${r.fin}</b> (${r.nuits} nuit${r.nuits > 1 ? 's' : ''}) — ${r.etat}`;
+      if (gcalLink) html += ` &nbsp;<a href="${gcalLink}" style="background:#4285F4;color:white;padding:3px 10px;border-radius:4px;text-decoration:none;font-size:12px;">📅 Ajouter à Google Agenda</a>`;
+      html += `</li>`;
+    }
     html += `</ul>`;
     if (attachments.length > 0) html += `<p>📎 <i>Fichier(s) .ics joint(s) — cliquez pour ajouter à Google Calendar</i></p>`;
   }
