@@ -24,34 +24,32 @@ function isoToFr(iso) {
   return `${d} ${MOIS_FR[m-1]} ${y}`;
 }
 
-function addDays(iso, n) {
-  const d = new Date(iso);
-  d.setDate(d.getDate() + n);
-  return d.toISOString().split("T")[0];
-}
-
 function daysBetween(iso1, iso2) {
   return Math.round((new Date(iso2) - new Date(iso1)) / 86400000);
 }
 
-function buildRangesFromDays(isoDates) {
-  if (!isoDates.length) return [];
-  const sorted = [...new Set(isoDates)].sort();
-  const ranges = [];
-  let start = sorted[0];
-  let prev = sorted[0];
-
-  for (let i = 1; i < sorted.length; i++) {
-    if (sorted[i] === addDays(prev, 1)) {
-      prev = sorted[i];
+// isEvent = premier jour de réservation
+// cellule colorée sans isEvent = dernier jour
+// On apparie : chaque isEvent avec la prochaine cellule colorée
+function buildReservations(cells) {
+  // cells = [{date, isStart}] triés par date
+  // isStart=true → début de réservation, isStart=false → fin
+  const sorted = cells.slice().sort((a, b) => a.date.localeCompare(b.date));
+  const reservations = [];
+  let i = 0;
+  while (i < sorted.length) {
+    if (sorted[i].isStart) {
+      // Cherche la prochaine fin
+      let j = i + 1;
+      while (j < sorted.length && sorted[j].isStart) j++;
+      const fin = j < sorted.length ? sorted[j].date : sorted[i].date;
+      reservations.push({ debut: sorted[i].date, fin });
+      i = j + 1;
     } else {
-      ranges.push({ debut: start, fin: prev });
-      start = sorted[i];
-      prev = sorted[i];
+      i++;
     }
   }
-  ranges.push({ debut: start, fin: prev });
-  return ranges;
+  return reservations;
 }
 
 function parseReservationsFromText(text) {
@@ -59,7 +57,6 @@ function parseReservationsFromText(text) {
   const lines = text.split("\n")
     .map(l => l.replace(/\s+/g, " ").trim())
     .filter(l => l.length > 0);
-
   for (let i = 0; i < lines.length - 1; i++) {
     const dateMatch = lines[i].match(/^(\d{1,2}\s+[^\d\s\-–]+(?:\s+\d{4})?)\s*[-–]\s*(\d{1,2}\s+[^\d\s\-–]+(?:\s+\d{4})?)$/);
     if (dateMatch) {
@@ -114,6 +111,7 @@ async function getMonthReservations(page, label, screenshotIndex, useTextParser)
   let reservations = [];
 
   if (useTextParser) {
+    // Mois courant : tableau texte (contient les états exacts)
     const content = await page.evaluate(() => {
       const body = document.body.cloneNode(true);
       body.querySelectorAll("script, style").forEach(el => el.remove());
@@ -122,31 +120,22 @@ async function getMonthReservations(page, label, screenshotIndex, useTextParser)
     const sectionMatch = content.match(/Réservation[\s\S]*?(?=Bilan du mois|$)/);
     reservations = parseReservationsFromText(sectionMatch ? sectionMatch[0] : content);
   } else {
-    // Log TOUTES les cellules du calendrier avec leur date et classes
-    const allCells = await page.evaluate(() => {
+    // Mois futurs : lit les cellules colorées du calendrier
+    // isEvent = début de réservation, coloré sans isEvent = fin
+    const cells = await page.evaluate(() => {
       return Array.from(document.querySelectorAll(".fc-daygrid-day[data-date]"))
         .map(el => ({
           date: el.getAttribute("data-date"),
-          classes: el.className,
-          // Regarde aussi les éléments enfants pour voir ce qui est coloré
-          hasColoredChild: !!el.querySelector("[style*='background-color']:not([style*='rgb(255'])"),
-          childStyles: Array.from(el.querySelectorAll("[style*='background']")).map(c => c.style.backgroundColor).join("|"),
-        }));
+          isStart: el.classList.contains("isEvent"),
+          isColored: !!el.querySelector("[style*='background-color']"),
+        }))
+        .filter(c => c.isStart || c.isColored)
+        .sort((a, b) => a.date.localeCompare(b.date));
     });
 
-    // Log pour debug
-    const occupied = allCells.filter(c => c.classes.includes("isEvent") || c.hasColoredChild || c.childStyles);
-    console.log(`  📅 Toutes cellules occupées (${occupied.length}):`);
-    occupied.forEach(c => console.log(`    ${c.date}: classes="${c.classes.trim()}" childStyles="${c.childStyles}"`));
+    console.log(`  🗓️  Cellules: ${JSON.stringify(cells)}`);
 
-    // Collecte les dates : isEvent + toute cellule avec un enfant coloré non-blanc
-    const isoDates = allCells
-      .filter(c => c.classes.includes("isEvent") || (c.childStyles && !c.childStyles.includes("255, 255, 255")))
-      .map(c => c.date);
-
-    console.log(`  📅 Jours retenus: ${isoDates.join(", ")}`);
-
-    const ranges = buildRangesFromDays(isoDates);
+    const ranges = buildReservations(cells);
     reservations = ranges.map(r => ({
       debut: isoToFr(r.debut),
       fin: isoToFr(r.fin),
@@ -235,7 +224,6 @@ async function navigateToProperty(page) {
   await page.waitForFunction(() => {
     return document.body.innerText.includes("Le jardin d'Henri");
   }, { timeout: 10000 });
-
   await page.evaluate(() => {
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     let node;
@@ -255,7 +243,6 @@ async function navigateToProperty(page) {
       }
     }
   });
-
   await new Promise(r => setTimeout(r, 5000));
   console.log(`📍 URL dashboard: ${page.url()}`);
 }
