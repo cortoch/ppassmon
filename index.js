@@ -17,21 +17,34 @@ function loadState() {
 }
 function saveState(state) { fs.writeFileSync(CACHE_FILE, JSON.stringify(state, null, 2)); }
 
-function parseReservations(text) {
+// Extrait les réservations depuis les événements FullCalendar dans le DOM
+function parseReservationsFromCalendar(calHtml) {
   const reservations = [];
-  const lines = text.split("\n")
-    .map(l => l.replace(/\s+/g, " ").trim())
-    .filter(l => l.length > 0);
 
-  for (let i = 0; i < lines.length - 1; i++) {
-    const dateMatch = lines[i].match(/^(\d{1,2}\s+[^\d\s\-–]+(?:\s+\d{4})?)\s*[-–]\s*(\d{1,2}\s+[^\d\s\-–]+(?:\s+\d{4})?)$/);
-    if (dateMatch) {
-      const nuits = lines[i + 1]?.match(/^\d+$/) ? lines[i + 1].trim() : "?";
-      const etat = lines[i + 2]?.match(/^\d+$/) ? lines[i + 3] || "" : lines[i + 2] || "";
-      reservations.push({ debut: dateMatch[1].trim(), fin: dateMatch[2].trim(), nuits, etat: etat.trim() });
-    }
+  // FullCalendar encode les événements dans des éléments avec data-date ou des classes fc-event
+  // On cherche les plages de dates colorées : fc-event, fc-daygrid-event, etc.
+  // Les titres d'événements sont dans .fc-event-title ou data-* attributes
+
+  // Regex pour trouver les événements dans le HTML
+  // Format typique: <a class="fc-event ..."><div class="fc-event-title">Texte</div></a>
+  const eventTitleRegex = /fc-event-title[^>]*>([^<]+)</g;
+  const titles = [];
+  let m;
+  while ((m = eventTitleRegex.exec(calHtml)) !== null) {
+    titles.push(m[1].trim());
   }
-  return reservations;
+
+  // Format data-date sur les cellules
+  const dateRegex = /data-date="(\d{4}-\d{2}-\d{2})"/g;
+  const dates = [];
+  while ((m = dateRegex.exec(calHtml)) !== null) {
+    dates.push(m[1]);
+  }
+
+  console.log(`  🔍 Titres événements trouvés: ${JSON.stringify(titles)}`);
+  console.log(`  📅 Dates cellules trouvées: ${dates.slice(0, 10).join(", ")}...`);
+
+  return { titles, dates };
 }
 
 function parseDate(str) {
@@ -63,51 +76,57 @@ function createICS(reservation) {
   return `BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//Passpass Monitor//FR\nCALSCALE:GREGORIAN\nMETHOD:PUBLISH\nBEGIN:VEVENT\nUID:${uid}\nDTSTAMP:${now}\nDTSTART;VALUE=DATE:${toICalDate(debut)}\nDTEND;VALUE=DATE:${toICalDate(finExclusive)}\nSUMMARY:🏠 Réservation Le jardin d'Henri (${reservation.nuits} nuit${reservation.nuits > 1 ? 's' : ''})\nDESCRIPTION:Réservation du ${reservation.debut} au ${reservation.fin}\\n${reservation.nuits} nuit${reservation.nuits > 1 ? 's' : ''}\\nÉtat: ${reservation.etat}\nLOCATION:Le jardin d'Henri\nBEGIN:VALARM\nTRIGGER:-PT24H\nACTION:DISPLAY\nDESCRIPTION:Rappel : arrivée demain - Le jardin d'Henri\nEND:VALARM\nEND:VEVENT\nEND:VCALENDAR`;
 }
 
-// Clique sur la flèche › du calendrier ET sur celle du dropdown "Réservations du mois"
-async function goToNextMonth(page) {
-  const result = await page.evaluate(() => {
-    const buttons = Array.from(document.querySelectorAll("button, [role='button']"));
-    const results = [];
-
-    // Trouve TOUS les boutons "suivant" (flèches ›) sur la page
-    const nextBtns = buttons.filter(b => {
-      const html = b.innerHTML;
-      const text = b.innerText?.trim();
-      return text === ">" || text === "›" || text === "→" ||
-             html.includes("chevron-right") || html.includes("angle-right") ||
-             html.includes("fa-chevron-right") || html.includes("fa-angle-right") ||
-             (html.includes("svg") && b.querySelector("path, polyline, polygon"));
-    });
-
-    // Clique sur tous les boutons "suivant" trouvés (calendrier + dropdown)
-    for (const btn of nextBtns) {
-      btn.click();
-      results.push(btn.closest("[class]")?.className?.substring(0, 60) || btn.tagName);
-    }
-    return results;
+async function clickCalendarNext(page) {
+  await page.evaluate(() => {
+    // Clique uniquement sur le bouton FullCalendar (fc-next-button)
+    const btn = document.querySelector(".fc-next-button");
+    if (btn) btn.click();
   });
-
-  console.log(`  ➡️  Boutons cliqués (${result.length}): ${result.join(" | ")}`);
   await new Promise(r => setTimeout(r, 2000));
 }
 
 async function getMonthReservations(page, label, screenshotIndex) {
-  await new Promise(r => setTimeout(r, 1500));
+  await new Promise(r => setTimeout(r, 2000));
   await page.screenshot({ path: `screenshot_${screenshotIndex}.png`, fullPage: true });
 
-  const content = await page.evaluate(() => {
-    const body = document.body.cloneNode(true);
-    body.querySelectorAll("script, style").forEach(el => el.remove());
-    return body.innerText;
+  // Récupère le HTML du calendrier FullCalendar uniquement
+  const calData = await page.evaluate(() => {
+    const cal = document.querySelector(".fc");
+    if (!cal) return { html: "", text: "", events: [] };
+
+    // Récupère les événements FullCalendar via les éléments fc-event
+    const events = Array.from(cal.querySelectorAll(".fc-event, .fc-daygrid-event")).map(el => ({
+      title: el.querySelector(".fc-event-title, .fc-title")?.innerText?.trim() || el.innerText?.trim(),
+      start: el.getAttribute("data-date") || el.closest("[data-date]")?.getAttribute("data-date"),
+      classes: el.className,
+      html: el.outerHTML.substring(0, 300),
+    }));
+
+    // Récupère aussi toutes les cellules avec data-date
+    const cells = Array.from(cal.querySelectorAll("[data-date]")).map(el => ({
+      date: el.getAttribute("data-date"),
+      hasEvent: el.querySelector(".fc-event") !== null,
+      classes: el.className,
+    })).filter(c => c.hasEvent);
+
+    return {
+      html: cal.outerHTML.substring(0, 5000),
+      text: cal.innerText,
+      events,
+      cells,
+    };
   });
 
-  const sectionMatch = content.match(/Réservation[\s\S]*?(?=Bilan du mois|$)/);
-  const section = sectionMatch ? sectionMatch[0] : content;
+  console.log(`\n--- CALENDRIER (${label}) ---`);
+  console.log(`Titre mois: ${calData.text?.split("\n")[0]}`);
+  console.log(`Événements fc-event (${calData.events?.length}):`, JSON.stringify(calData.events?.slice(0, 5), null, 2));
+  console.log(`Cellules avec événements (${calData.cells?.length}):`, JSON.stringify(calData.cells?.slice(0, 5), null, 2));
+  console.log(`HTML extrait:\n${calData.html?.substring(0, 2000)}`);
+  console.log(`--- FIN ---\n`);
 
-  const res = parseReservations(section);
-  console.log(`📅 ${label}: ${res.length} réservation(s)`);
-  res.forEach(r => console.log(`   ${r.debut} → ${r.fin} (${r.nuits} nuits) — ${r.etat}`));
-  return res;
+  // Pour l'instant retourne vide — on analysera le HTML pour construire le bon parser
+  console.log(`📅 ${label}: analyse en cours (voir logs HTML ci-dessus)`);
+  return [];
 }
 
 async function sendEmail(previousAllRes, allReservations) {
@@ -229,18 +248,16 @@ async function scrapePasspass() {
     await navigateToProperty(page);
 
     // Mois en cours
-    const currentRes = await getMonthReservations(page, "Mois en cours", 0);
-    let allReservations = [...currentRes];
+    let allReservations = await getMonthReservations(page, "Mois en cours", 0);
 
-    // 3 mois suivants : avance les DEUX contrôles en même temps
+    // 3 mois suivants
     for (let i = 1; i <= 3; i++) {
       console.log(`\n📆 Passage au mois +${i}...`);
-      await goToNextMonth(page);
+      await clickCalendarNext(page);
       const monthRes = await getMonthReservations(page, `Mois +${i}`, i);
       allReservations = [...allReservations, ...monthRes];
     }
 
-    // Déduplique
     const seen = new Set();
     allReservations = allReservations.filter(r => {
       const key = `${r.debut}-${r.fin}`;
