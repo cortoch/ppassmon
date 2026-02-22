@@ -287,7 +287,7 @@ async function scrapePasspass() {
     const currentRes = await getMonthReservations(page, "Mois en cours", 0, true);
     let allReservations = [...currentRes];
 
-    for (let i = 1; i <= 3; i++) {
+    for (let i = 1; i <= 5; i++) {
       console.log(`\n📆 Passage au mois +${i}...`);
       await clickCalendarNext(page);
       const monthRes = await getMonthReservations(page, `Mois +${i}`, i, false);
@@ -302,7 +302,7 @@ async function scrapePasspass() {
       return true;
     });
 
-    console.log(`\n📊 Total: ${allReservations.length} réservation(s) sur 4 mois`);
+    console.log(`\n📊 Total: ${allReservations.length} réservation(s) sur 6 mois`);
     return allReservations;
 
   } finally {
