@@ -34,7 +34,6 @@ function daysBetween(iso1, iso2) {
   return Math.round((new Date(iso2) - new Date(iso1)) / 86400000);
 }
 
-// Regroupe les jours consécutifs en plages
 function buildRangesFromDays(isoDates) {
   if (!isoDates.length) return [];
   const sorted = [...new Set(isoDates)].sort();
@@ -82,21 +81,6 @@ function parseDate(str) {
   return null;
 }
 
-function toICalDate(date) {
-  return `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}${String(date.getDate()).padStart(2, "0")}`;
-}
-
-function createICS(reservation) {
-  const debut = parseDate(reservation.debut);
-  const fin = parseDate(reservation.fin);
-  if (!debut || !fin) return null;
-  const finExclusive = new Date(fin);
-  finExclusive.setDate(finExclusive.getDate() + 1);
-  const uid = `passpass-${toICalDate(debut)}-${toICalDate(fin)}@passpass-monitor`;
-  const now = new Date().toISOString().replace(/[-:.]/g, "").substring(0, 15) + "Z";
-  return `BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//Passpass Monitor//FR\nCALSCALE:GREGORIAN\nMETHOD:PUBLISH\nBEGIN:VEVENT\nUID:${uid}\nDTSTAMP:${now}\nDTSTART;VALUE=DATE:${toICalDate(debut)}\nDTEND;VALUE=DATE:${toICalDate(finExclusive)}\nSUMMARY:🏠 Réservation Le jardin d'Henri (${reservation.nuits} nuit${reservation.nuits > 1 ? 's' : ''})\nDESCRIPTION:Réservation du ${reservation.debut} au ${reservation.fin}\\n${reservation.nuits} nuit${reservation.nuits > 1 ? 's' : ''}\\nÉtat: ${reservation.etat}\nLOCATION:Le jardin d'Henri\nBEGIN:VALARM\nTRIGGER:-PT24H\nACTION:DISPLAY\nDESCRIPTION:Rappel : arrivée demain - Le jardin d'Henri\nEND:VALARM\nEND:VEVENT\nEND:VCALENDAR`;
-}
-
 function buildGCalLink(reservation) {
   const debut = parseDate(reservation.debut);
   const fin = parseDate(reservation.fin);
@@ -119,9 +103,8 @@ async function clickCalendarNext(page) {
   await new Promise(r => setTimeout(r, 2000));
 }
 
-async function getMonthReservations(page, label, screenshotIndex, useTextParser) {
+async function getMonthReservations(page, label, useTextParser) {
   await new Promise(r => setTimeout(r, 2000));
-  await page.screenshot({ path: `screenshot_${screenshotIndex}.png`, fullPage: true });
 
   let reservations = [];
 
@@ -134,10 +117,8 @@ async function getMonthReservations(page, label, screenshotIndex, useTextParser)
     const sectionMatch = content.match(/Réservation[\s\S]*?(?=Bilan du mois|$)/);
     reservations = parseReservationsFromText(sectionMatch ? sectionMatch[0] : content);
   } else {
-    // Récupère TOUTES les cellules du mois avec leur couleur de fond calculée
     const allCells = await page.evaluate(() => {
       return Array.from(document.querySelectorAll(".fc-daygrid-day[data-date]")).map(el => {
-        // Utilise getComputedStyle sur les enfants pour trouver la vraie couleur de fond
         const allChildren = Array.from(el.querySelectorAll("*"));
         const bg = allChildren
           .map(c => window.getComputedStyle(c).backgroundColor)
@@ -150,7 +131,6 @@ async function getMonthReservations(page, label, screenshotIndex, useTextParser)
       });
     });
 
-    // Toutes les cellules qui ont une couleur non-blanche = occupées
     const occupied = allCells.filter(c => c.isStart || c.bg);
     console.log(`  🗓️  Cellules occupées: ${JSON.stringify(occupied)}`);
 
@@ -175,19 +155,11 @@ async function sendEmail(previousAllRes, allReservations) {
   const currentKeys = new Set(allReservations.map(r => `${r.debut}-${r.fin}`));
   const removedRes = previousAllRes.filter(r => !currentKeys.has(`${r.debut}-${r.fin}`));
 
-  const attachments = [];
-  for (const r of newRes) {
-    const ics = createICS(r);
-    if (ics) attachments.push({
-      filename: `reservation-${r.debut.replace(/\s+/g, "-")}.ics`,
-      content: ics, contentType: "text/calendar",
-    });
-  }
-
   const transporter = nodemailer.createTransport({ service: "gmail", auth: { user: EMAIL_FROM, pass: EMAIL_PASSWORD } });
   const now = new Date().toLocaleString("fr-FR", { timeZone: "Europe/Paris" });
 
   let html = `<h2>🔔 Modification détectée sur Passpass</h2><p><strong>Date :</strong> ${now}</p>`;
+
   if (newRes.length > 0) {
     html += `<h3>🆕 Nouvelles réservations :</h3><ul>`;
     for (const r of newRes) {
@@ -197,14 +169,15 @@ async function sendEmail(previousAllRes, allReservations) {
       html += `</li>`;
     }
     html += `</ul>`;
-    if (attachments.length > 0) html += `<p>📎 <i>Fichier(s) .ics joint(s) — cliquez pour ajouter à Google Calendar</i></p>`;
   }
+
   if (removedRes.length > 0) {
     html += `<h3>❌ Réservations annulées :</h3><ul>`;
     for (const r of removedRes) html += `<li>📅 <b>${r.debut}</b> → <b>${r.fin}</b></li>`;
     html += `</ul>`;
   }
-  html += `<h3>📋 Toutes les réservations (4 mois) :</h3><ul>`;
+
+  html += `<h3>📋 Toutes les réservations (6 mois) :</h3><ul>`;
   for (const r of allReservations) {
     const emoji = r.etat.includes("cours") ? "🟠" : r.etat.includes("attente") ? "🟡" : r.etat.includes("venir") ? "🔵" : "✅";
     html += `<li>${emoji} ${r.debut} → ${r.fin} (${r.nuits} nuit${r.nuits > 1 ? 's' : ''}) — ${r.etat}</li>`;
@@ -213,10 +186,12 @@ async function sendEmail(previousAllRes, allReservations) {
 
   await transporter.sendMail({
     from: EMAIL_FROM, to: EMAIL_TO,
-    subject: newRes.length > 0 ? `🆕 Nouvelle réservation : ${newRes[0].debut} → ${newRes[0].fin}` : `🔔 Passpass - Modification détectée`,
-    html, attachments,
+    subject: newRes.length > 0
+      ? `🆕 Nouvelle réservation : ${newRes[0].debut} → ${newRes[0].fin}`
+      : `🔔 Passpass - Modification détectée`,
+    html,
   });
-  console.log(`✅ Email envoyé avec ${attachments.length} fichier(s) .ics`);
+  console.log(`✅ Email envoyé`);
 }
 
 async function login(page) {
@@ -284,13 +259,13 @@ async function scrapePasspass() {
     console.log("✅ Connecté !");
     await navigateToProperty(page);
 
-    const currentRes = await getMonthReservations(page, "Mois en cours", 0, true);
+    const currentRes = await getMonthReservations(page, "Mois en cours", true);
     let allReservations = [...currentRes];
 
     for (let i = 1; i <= 5; i++) {
       console.log(`\n📆 Passage au mois +${i}...`);
       await clickCalendarNext(page);
-      const monthRes = await getMonthReservations(page, `Mois +${i}`, i, false);
+      const monthRes = await getMonthReservations(page, `Mois +${i}`, false);
       allReservations = [...allReservations, ...monthRes];
     }
 
@@ -311,7 +286,7 @@ async function scrapePasspass() {
 }
 
 async function main() {
-  console.log("🚀 Passpass Monitor - GitHub Actions");
+  console.log("🚀 Passpass Monitor");
   try {
     const allReservations = await scrapePasspass();
     const previousState = loadState();
