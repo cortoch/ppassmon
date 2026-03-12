@@ -133,21 +133,41 @@ async function scrapeMonthByClickingDays(page, monthLabel, calendarYear, calenda
   const currentYear = new Date().getFullYear();
   const found = new Map();
 
-  // Récupère tous les jours du mois affiché via FullCalendar data-date
-  const days = await page.evaluate(() => {
+  // Étape 1 : trouve les jours COLORÉS dans le calendrier (= jours avec réservation)
+  // Les jours occupés ont un fond coloré (rose Airbnb, bleu Booking, etc.)
+  const occupiedDays = await page.evaluate(() => {
     const cells = Array.from(document.querySelectorAll(".fc-daygrid-day[data-date]"));
-    if (cells.length > 0) return cells.map(c => c.getAttribute("data-date"));
-    return Array.from(document.querySelectorAll("td[data-date]")).map(c => c.getAttribute("data-date"));
+    const occupied = [];
+    for (const cell of cells) {
+      const date = cell.getAttribute("data-date");
+      // Vérifie si la cellule ou ses enfants ont un fond coloré (pas blanc/transparent)
+      const allEls = [cell, ...Array.from(cell.querySelectorAll("*"))];
+      const hasColor = allEls.some(el => {
+        const bg = window.getComputedStyle(el).backgroundColor;
+        if (!bg || bg === "rgba(0, 0, 0, 0)" || bg === "transparent") return false;
+        // Exclure blanc et gris très clair
+        const rgb = bg.match(/\d+/g)?.map(Number);
+        if (!rgb) return false;
+        const [r, g, b] = rgb;
+        const isWhiteOrNearWhite = r > 240 && g > 240 && b > 240;
+        const isLightGray = Math.abs(r-g) < 15 && Math.abs(g-b) < 15 && r > 200;
+        return !isWhiteOrNearWhite && !isLightGray;
+      });
+      // Vérifie aussi les classes FC qui indiquent un événement
+      const hasEvent = cell.querySelector(".fc-event, .fc-daygrid-event, [class*='event']");
+      if (hasColor || hasEvent) occupied.push(date);
+    }
+    return occupied;
   });
 
-  if (days.length === 0) {
-    console.log(`  ⚠️  Aucune cellule data-date trouvée`);
+  console.log(`  🎨 ${occupiedDays.length} jour(s) coloré(s) détecté(s): ${occupiedDays.join(", ")}`);
+
+  if (occupiedDays.length === 0) {
+    console.log(`  ℹ️  Aucun jour occupé ce mois`);
     return [];
   }
 
-  console.log(`  📅 ${days.length} jours à cliquer pour ${monthLabel}`);
-
-  // Lit le widget "Séjour sélectionné" courant
+  // Étape 2 : lit l'état initial du widget
   async function readSejour() {
     const raw = await page.evaluate(() => {
       const body = document.body.cloneNode(true);
@@ -157,35 +177,42 @@ async function scrapeMonthByClickingDays(page, monthLabel, calendarYear, calenda
     return parseSejour(raw, currentYear);
   }
 
-  // Mémorise l'état initial du widget (séjour affiché du mois précédent)
   let lastKey = null;
   const init = await readSejour();
   if (init && init.dateDebut) {
     lastKey = `${init.dateDebut}-${init.dateFin}`;
     console.log(`  🔖 Widget initial: ${init.debut} → ${init.fin}`);
-  } else {
-    console.log(`  🔖 Widget initial: vide`);
   }
 
-  // Clique chaque jour du mois un par un
-  for (const dayDate of days) {
-    // Double-clic : d'abord la cellule, puis le numéro intérieur
+  // Étape 3 : clique uniquement les jours colorés (+ leurs voisins immédiats pour attraper le 1er jour)
+  // On ajoute le jour avant chaque groupe pour s'assurer de cliquer le jour de début
+  const daysToClick = new Set();
+  for (const d of occupiedDays) {
+    const date = new Date(d);
+    // Ajoute le jour lui-même et le jour précédent (cas où le début est la veille)
+    const prev = new Date(date);
+    prev.setDate(prev.getDate() - 1);
+    daysToClick.add(prev.toISOString().split("T")[0]);
+    daysToClick.add(d);
+  }
+  const sortedDays = Array.from(daysToClick).sort();
+  console.log(`  🖱️  Clics prévus: ${sortedDays.join(", ")}`);
+
+  for (const dayDate of sortedDays) {
     await page.evaluate((date) => {
       const cell = document.querySelector(`.fc-daygrid-day[data-date="${date}"]`);
       if (!cell) return;
       cell.click();
-      const inner = cell.querySelector(".fc-daygrid-day-number, a, [class*='day-number']");
+      const inner = cell.querySelector(".fc-daygrid-day-number, a, .fc-event, [class*='event']");
       if (inner) inner.click();
     }, dayDate);
 
-    await new Promise(r => setTimeout(r, 600));
+    await new Promise(r => setTimeout(r, 700));
 
     const sejour = await readSejour();
     if (!sejour || !sejour.dateDebut) continue;
 
     const key = `${sejour.dateDebut}-${sejour.dateFin}`;
-
-    // Nouveau séjour = le widget a changé par rapport au dernier état connu
     if (key !== lastKey) {
       lastKey = key;
       if (!found.has(key)) {
@@ -196,7 +223,7 @@ async function scrapeMonthByClickingDays(page, monthLabel, calendarYear, calenda
   }
 
   const results = Array.from(found.values());
-  console.log(`  📊 ${results.length} réservation(s) trouvée(s) pour ${monthLabel}`);
+  console.log(`  📊 ${results.length} réservation(s) pour ${monthLabel}`);
   return results;
 }
 
