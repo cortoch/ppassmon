@@ -131,80 +131,72 @@ function parseSejour(rawText, currentYear) {
 // C'est la seule méthode fiable pour les mois futurs
 async function scrapeMonthByClickingDays(page, monthLabel, calendarYear, calendarMonth) {
   const currentYear = new Date().getFullYear();
-  const found = new Map(); // key = "dateDebut-dateFin" → reservation
+  const found = new Map();
 
-  // Récupère la liste des jours du calendrier affiché
+  // Récupère tous les jours du mois affiché via FullCalendar data-date
   const days = await page.evaluate(() => {
-    // FullCalendar expose les cellules via data-date (YYYY-MM-DD)
     const cells = Array.from(document.querySelectorAll(".fc-daygrid-day[data-date]"));
-    if (cells.length > 0) {
-      return cells.map(c => c.getAttribute("data-date"));
-    }
-    // Fallback : cherche les cellules td avec data-date
-    const tdCells = Array.from(document.querySelectorAll("td[data-date]"));
-    return tdCells.map(c => c.getAttribute("data-date"));
+    if (cells.length > 0) return cells.map(c => c.getAttribute("data-date"));
+    return Array.from(document.querySelectorAll("td[data-date]")).map(c => c.getAttribute("data-date"));
   });
 
   if (days.length === 0) {
-    console.log(`  ⚠️  Aucune cellule data-date trouvée, tentative via numéros de jours`);
-    // Fallback : on clique les numéros de jours visibles dans le calendrier
-    return await scrapeMonthByClickingNumbers(page, monthLabel, calendarYear, calendarMonth);
+    console.log(`  ⚠️  Aucune cellule data-date trouvée`);
+    return [];
   }
 
-  console.log(`  📅 ${days.length} jours trouvés via data-date`);
+  console.log(`  📅 ${days.length} jours à cliquer pour ${monthLabel}`);
 
-  // Lit l'état INITIAL du widget avant tout clic (peut déjà afficher un séjour du mois précédent)
-  let previousSejourKey = null;
-  {
-    const initText = await page.evaluate(() => {
+  // Lit le widget "Séjour sélectionné" courant
+  async function readSejour() {
+    const raw = await page.evaluate(() => {
       const body = document.body.cloneNode(true);
       body.querySelectorAll("script, style").forEach(el => el.remove());
       return body.innerText;
     });
-    const initSejour = parseSejour(initText, currentYear);
-    if (initSejour) previousSejourKey = `${initSejour.dateDebut}-${initSejour.dateFin}`;
-    console.log(`  🔖 Séjour initial avant clics: ${previousSejourKey || "aucun"}`);
+    return parseSejour(raw, currentYear);
   }
 
+  // Mémorise l'état initial du widget (séjour affiché du mois précédent)
+  let lastKey = null;
+  const init = await readSejour();
+  if (init && init.dateDebut) {
+    lastKey = `${init.dateDebut}-${init.dateFin}`;
+    console.log(`  🔖 Widget initial: ${init.debut} → ${init.fin}`);
+  } else {
+    console.log(`  🔖 Widget initial: vide`);
+  }
+
+  // Clique chaque jour du mois un par un
   for (const dayDate of days) {
-    // Clic sur la cellule du jour
-    const clicked = await page.evaluate((date) => {
-      const cell = document.querySelector(`.fc-daygrid-day[data-date="${date}"], td[data-date="${date}"]`);
-      if (!cell) return false;
+    // Double-clic : d'abord la cellule, puis le numéro intérieur
+    await page.evaluate((date) => {
+      const cell = document.querySelector(`.fc-daygrid-day[data-date="${date}"]`);
+      if (!cell) return;
       cell.click();
-      const inner = cell.querySelector("a, .fc-daygrid-day-number, [class*='day-number']");
+      const inner = cell.querySelector(".fc-daygrid-day-number, a, [class*='day-number']");
       if (inner) inner.click();
-      return true;
     }, dayDate);
 
-    if (!clicked) continue;
-    await new Promise(r => setTimeout(r, 800));
+    await new Promise(r => setTimeout(r, 600));
 
-    // Lit le panneau "Séjour sélectionné"
-    const rawText = await page.evaluate(() => {
-      const body = document.body.cloneNode(true);
-      body.querySelectorAll("script, style").forEach(el => el.remove());
-      return body.innerText;
-    });
-
-    const sejour = parseSejour(rawText, currentYear);
+    const sejour = await readSejour();
     if (!sejour || !sejour.dateDebut) continue;
 
     const key = `${sejour.dateDebut}-${sejour.dateFin}`;
 
-    // Ignore si le widget n'a pas changé par rapport à l'état précédent (= jour vide)
-    if (key === previousSejourKey) continue;
-
-    // Nouveau séjour détecté !
-    previousSejourKey = key;
-    if (!found.has(key)) {
-      found.set(key, sejour);
-      console.log(`   ✅ Clic ${dayDate} → ${sejour.debut} → ${sejour.fin} | ${sejour.nuits}n | ${sejour.revenu} | ${sejour.voyageur}`);
+    // Nouveau séjour = le widget a changé par rapport au dernier état connu
+    if (key !== lastKey) {
+      lastKey = key;
+      if (!found.has(key)) {
+        found.set(key, sejour);
+        console.log(`   🆕 Clic ${dayDate} → ${sejour.debut} - ${sejour.fin} | ${sejour.nuits}n | ${sejour.revenu} | ${sejour.voyageur || "?"}`);
+      }
     }
   }
 
   const results = Array.from(found.values());
-  console.log(`  📊 ${results.length} réservation(s) unique(s) pour ${monthLabel}`);
+  console.log(`  📊 ${results.length} réservation(s) trouvée(s) pour ${monthLabel}`);
   return results;
 }
 
