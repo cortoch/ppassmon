@@ -154,51 +154,85 @@ async function scrapeReservationsTable(page, monthLabel) {
 }
 
 // ─── NAVIGATION VERS UN MOIS VIA LE SELECT ───────────────────────────────────
+// Retourne le mois/année actuellement affiché dans le calendrier
+async function getCurrentCalendarMonth(page) {
+  return await page.evaluate(() => {
+    const body = document.body.cloneNode(true);
+    body.querySelectorAll("script, style").forEach(el => el.remove());
+    const text = body.innerText;
+    const m = text.match(/(janvier|f[eé]vrier|mars|avril|mai|juin|juillet|ao[uû]t|septembre|octobre|novembre|d[eé]cembre)\s+(\d{4})/i);
+    return m ? m[0].toLowerCase() : null;
+  });
+}
+
 async function navigateToMonth(page, year, month) {
-  // month = 1-12
   const monthFr = MOIS_NUM_TO_FR[month - 1];
+  const targetLabel = `${monthFr} ${year}`.toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   console.log(`  🗓️  Navigation vers ${monthFr} ${year}...`);
 
-  const result = await page.evaluate((targetYear, targetMonth, monthFrLower) => {
-    // Cherche tous les <select> de la page
-    const selects = Array.from(document.querySelectorAll("select"));
-    for (const sel of selects) {
-      const opts = Array.from(sel.options);
-      for (let i = 0; i < opts.length; i++) {
-        const txt = opts[i].text.trim().toLowerCase()
-          .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-        const mfr = monthFrLower.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-        if (txt.includes(mfr) && txt.includes(String(targetYear))) {
-          sel.selectedIndex = i;
-          sel.dispatchEvent(new Event("change", { bubbles: true }));
-          sel.dispatchEvent(new Event("input", { bubbles: true }));
-          return `✅ select option: "${opts[i].text}"`;
-        }
-      }
+  // Dump de tous les boutons pour debug
+  const debugInfo = await page.evaluate(() => {
+    const btns = Array.from(document.querySelectorAll("button, [role='button']"));
+    return btns.map(b => ({
+      text: (b.innerText || "").trim().substring(0, 40),
+      cls: (b.className || "").substring(0, 60),
+      aria: b.getAttribute("aria-label") || "",
+      inNav: !!b.closest("nav, header, aside"),
+    }));
+  });
+  console.log(`  🔍 Tous les boutons: ${JSON.stringify(debugInfo)}`);
+
+  for (let attempt = 0; attempt < 8; attempt++) {
+    // Vérifie le mois actuellement affiché
+    const current = await getCurrentCalendarMonth(page);
+    const currentNorm = (current || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    console.log(`  📅 Mois affiché: "${current}" (cible: "${targetLabel}")`);
+
+    if (currentNorm.includes(targetLabel)) {
+      console.log(`  ✅ Mois cible atteint !`);
+      return;
     }
 
-    // Fallback : bouton ">" dans une zone calendrier
-    // Cherche un container avec des chiffres (calendrier) et un bouton suivant
-    const allBtns = Array.from(document.querySelectorAll("button, [role='button'], [class*='next'], [class*='arrow-right'], [class*='chevron']"));
-    for (const btn of allBtns) {
-      const txt = (btn.innerText || btn.getAttribute("aria-label") || "").trim();
-      if (/^[>›»→]$|next|suivant|right/i.test(txt)) {
-        // Vérifier que ce n'est pas un bouton de navigation principale
-        const isNavBtn = btn.closest("nav, header, [class*='sidebar'], [class*='menu']");
-        if (!isNavBtn) {
+    // Clic sur le bouton suivant du calendrier (hors nav principale)
+    const clicked = await page.evaluate(() => {
+      const candidates = Array.from(document.querySelectorAll("button, [role='button']"))
+        .filter(b => !b.closest("nav, header, aside, [class*='sidebar'], [class*='menu'], [class*='navbar']"));
+
+      // Priorité 1 : bouton avec flèche comme seul contenu
+      for (const btn of candidates) {
+        const txt = (btn.innerText || "").trim();
+        if (/^[>›»→▶]$/.test(txt)) {
           btn.click();
-          return `✅ btn suivant: "${txt}"`;
+          return `arrow-text: "${txt}"`;
         }
       }
-    }
 
-    // Log tous les boutons pour debug
-    const btnTexts = allBtns.slice(0, 20).map(b => (b.innerText || b.className || "").trim().substring(0, 30));
-    return `❌ non trouvé. Boutons disponibles: ${JSON.stringify(btnTexts)}`;
-  }, year, month, monthFr);
+      // Priorité 2 : classe ou aria-label contenant next/right/forward/suivant
+      for (const btn of candidates) {
+        const cls = (btn.className || "").toLowerCase();
+        const aria = (btn.getAttribute("aria-label") || "").toLowerCase();
+        if (/next|right|forward|suivant|after/.test(cls + aria)) {
+          btn.click();
+          return `class/aria: cls="${cls.substring(0,40)}" aria="${aria}"`;
+        }
+      }
 
-  console.log(`  ${result}`);
-  await new Promise(r => setTimeout(r, 3000));
+      // Priorité 3 : dernier bouton de la liste hors nav (souvent ">" dans calendrier "< Mois >")
+      if (candidates.length >= 2) {
+        const last = candidates[candidates.length - 1];
+        last.click();
+        return `last-cal-btn: text="${(last.innerText||"").trim().substring(0,30)}" cls="${(last.className||"").substring(0,40)}"`;
+      }
+
+      return null;
+    });
+
+    console.log(`  🖱️  Clic attempt ${attempt + 1}: ${clicked || "rien trouvé"}`);
+    if (!clicked) break;
+    await new Promise(r => setTimeout(r, 2500));
+  }
+
   await screenshot(page, `mois_${month}`);
 }
 
