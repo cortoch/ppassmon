@@ -133,7 +133,6 @@ async function scrapeMonthByClickingDays(page, monthLabel, calendarYear, calenda
   const currentYear = new Date().getFullYear();
   const found = new Map();
 
-  // Récupère tous les jours du mois via FullCalendar
   const days = await page.evaluate(() => {
     const cells = Array.from(document.querySelectorAll(".fc-daygrid-day[data-date]"));
     return cells.map(c => c.getAttribute("data-date")).filter(Boolean);
@@ -143,55 +142,72 @@ async function scrapeMonthByClickingDays(page, monthLabel, calendarYear, calenda
     console.log(`  ⚠️  Aucune cellule data-date trouvée`);
     return [];
   }
-  console.log(`  📅 ${days.length} jours à cliquer pour ${monthLabel}`);
+  console.log(`  📅 ${days.length} jours à cliquer (${calendarYear}-${String(calendarMonth).padStart(2,"0")})`);
 
-  async function readSejour() {
-    const raw = await page.evaluate(() => {
+  // Screenshot avant de commencer pour confirmer le bon mois affiché
+  await page.screenshot({ path: `/tmp/cal_${calendarYear}_${calendarMonth}_avant.png` });
+
+  const moisDebut = new Date(calendarYear, calendarMonth - 1, 1);
+  const moisFin   = new Date(calendarYear, calendarMonth, 0);
+
+  for (const dayDate of days) {
+    // Vérifie que ce jour appartient bien au mois cible (FullCalendar inclut parfois des jours du mois adjacent)
+    const [dy, dm] = dayDate.split("-").map(Number);
+    if (dm !== calendarMonth || dy !== calendarYear) {
+      console.log(`   ⏭️  Skip ${dayDate} (hors mois cible)`);
+      continue;
+    }
+
+    // Lit le widget AVANT le clic
+    const rawBefore = await page.evaluate(() => {
       const body = document.body.cloneNode(true);
       body.querySelectorAll("script, style").forEach(el => el.remove());
       return body.innerText;
     });
-    return parseSejour(raw, currentYear);
-  }
+    const before = parseSejour(rawBefore, currentYear);
+    const keyBefore = before ? `${before.dateDebut}-${before.dateFin}` : "";
 
-  let lastKey = "";
-
-  for (const dayDate of days) {
-    await page.evaluate((date) => {
+    // Clic sur la cellule
+    const clicked = await page.evaluate((date) => {
       const cell = document.querySelector(`.fc-daygrid-day[data-date="${date}"]`);
-      if (!cell) return;
+      if (!cell) return false;
       cell.click();
       const inner = cell.querySelector(".fc-daygrid-day-number, a");
       if (inner) inner.click();
+      return true;
     }, dayDate);
+    if (!clicked) { console.log(`   ❌ Cellule ${dayDate} introuvable`); continue; }
 
-    await new Promise(r => setTimeout(r, 500));
+    await new Promise(r => setTimeout(r, 600));
 
-    const sejour = await readSejour();
-    if (!sejour || !sejour.dateDebut) continue;
+    // Lit le widget APRÈS le clic
+    const rawAfter = await page.evaluate(() => {
+      const body = document.body.cloneNode(true);
+      body.querySelectorAll("script, style").forEach(el => el.remove());
+      return body.innerText;
+    });
+    const after = parseSejour(rawAfter, currentYear);
+    const keyAfter = after ? `${after.dateDebut}-${after.dateFin}` : "";
 
-    const key = `${sejour.dateDebut}-${sejour.dateFin}`;
-    if (key === lastKey) continue;
-    lastKey = key;
+    // Log chaque clic avec avant/après
+    const changed = keyAfter !== keyBefore;
+    console.log(`   ${changed ? "🔄" : "·"} ${dayDate}: avant="${keyBefore}" après="${keyAfter}"`);
 
-    // ✅ FILTRE CLÉ : le séjour doit chevaucher le mois en cours
-    // (dateDebut <= fin du mois ET dateFin >= début du mois)
-    const moisDebut = new Date(calendarYear, calendarMonth - 1, 1);
-    const moisFin = new Date(calendarYear, calendarMonth, 0); // dernier jour du mois
-    const sejourDebut = new Date(sejour.dateDebut);
-    const sejourFin = new Date(sejour.dateFin);
-    const chevauche = sejourDebut <= moisFin && sejourFin >= moisDebut;
+    if (!after || !after.dateDebut) continue;
 
-    if (!chevauche) {
-      console.log(`   ⏭️  ${dayDate} → ${sejour.debut} - ${sejour.fin} (hors mois ${monthLabel}, ignoré)`);
-      continue;
-    }
+    // Filtre : le séjour doit chevaucher le mois cible
+    const sejourDebut = new Date(after.dateDebut);
+    const sejourFin   = new Date(after.dateFin);
+    if (sejourDebut > moisFin || sejourFin < moisDebut) continue;
 
-    if (!found.has(key)) {
-      found.set(key, sejour);
-      console.log(`   🆕 ${dayDate} → ${sejour.debut} - ${sejour.fin} | ${sejour.nuits}n | ${sejour.revenu} | ${sejour.voyageur || "?"}`);
+    if (!found.has(keyAfter)) {
+      found.set(keyAfter, after);
+      console.log(`   🆕 RÉSERVATION: ${after.debut} - ${after.fin} | ${after.nuits}n | ${after.revenu} | ${after.voyageur || "?"}`);
     }
   }
+
+  // Screenshot après tous les clics
+  await page.screenshot({ path: `/tmp/cal_${calendarYear}_${calendarMonth}_apres.png` });
 
   const results = Array.from(found.values());
   console.log(`  📊 ${results.length} réservation(s) pour ${monthLabel}`);
