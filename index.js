@@ -153,13 +153,25 @@ async function scrapeMonthByClickingDays(page, monthLabel, calendarYear, calenda
 
   console.log(`  📅 ${days.length} jours trouvés via data-date`);
 
+  // Lit l'état INITIAL du widget avant tout clic (peut déjà afficher un séjour du mois précédent)
+  let previousSejourKey = null;
+  {
+    const initText = await page.evaluate(() => {
+      const body = document.body.cloneNode(true);
+      body.querySelectorAll("script, style").forEach(el => el.remove());
+      return body.innerText;
+    });
+    const initSejour = parseSejour(initText, currentYear);
+    if (initSejour) previousSejourKey = `${initSejour.dateDebut}-${initSejour.dateFin}`;
+    console.log(`  🔖 Séjour initial avant clics: ${previousSejourKey || "aucun"}`);
+  }
+
   for (const dayDate of days) {
     // Clic sur la cellule du jour
     const clicked = await page.evaluate((date) => {
       const cell = document.querySelector(`.fc-daygrid-day[data-date="${date}"], td[data-date="${date}"]`);
       if (!cell) return false;
       cell.click();
-      // Essaie aussi de cliquer sur le lien/numéro à l'intérieur
       const inner = cell.querySelector("a, .fc-daygrid-day-number, [class*='day-number']");
       if (inner) inner.click();
       return true;
@@ -176,12 +188,18 @@ async function scrapeMonthByClickingDays(page, monthLabel, calendarYear, calenda
     });
 
     const sejour = parseSejour(rawText, currentYear);
-    if (sejour && sejour.dateDebut) {
-      const key = `${sejour.dateDebut}-${sejour.dateFin}`;
-      if (!found.has(key)) {
-        found.set(key, sejour);
-        console.log(`   ✅ Clic ${dayDate} → ${sejour.debut} → ${sejour.fin} | ${sejour.nuits}n | ${sejour.revenu} | ${sejour.voyageur}`);
-      }
+    if (!sejour || !sejour.dateDebut) continue;
+
+    const key = `${sejour.dateDebut}-${sejour.dateFin}`;
+
+    // Ignore si le widget n'a pas changé par rapport à l'état précédent (= jour vide)
+    if (key === previousSejourKey) continue;
+
+    // Nouveau séjour détecté !
+    previousSejourKey = key;
+    if (!found.has(key)) {
+      found.set(key, sejour);
+      console.log(`   ✅ Clic ${dayDate} → ${sejour.debut} → ${sejour.fin} | ${sejour.nuits}n | ${sejour.revenu} | ${sejour.voyageur}`);
     }
   }
 
