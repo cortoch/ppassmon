@@ -303,24 +303,51 @@ async function login(page) {
 
 // ─── NAVIGATION VERS LA PROPRIÉTÉ ────────────────────────────────────────────
 async function navigateToProperty(page) {
-  await page.waitForFunction(() => document.body.innerText.includes("Le jardin d'Henri"), { timeout: 10000 });
-  await page.evaluate(() => {
+  // Attendre que la page soit chargée (au moins un titre ou contenu visible)
+  await new Promise(r => setTimeout(r, 3000));
+  await takeDebugScreenshot(page, "accueil");
+
+  // Dump du texte visible pour debug
+  const pageText = await page.evaluate(() => {
+    const body = document.body.cloneNode(true);
+    body.querySelectorAll("script, style").forEach(el => el.remove());
+    return body.innerText.replace(/\s+/g, " ").trim().substring(0, 1000);
+  });
+  console.log(`📄 Contenu page accueil (1000c): ${pageText}`);
+
+  // Cherche "jardin" (insensible à la casse + accents) ou n'importe quelle propriété cliquable
+  const found = await page.evaluate(() => {
+    const pattern = /jardin|henri|passpass|property|logement/i;
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     let node;
     while ((node = walker.nextNode())) {
-      if (node.textContent.includes("Le jardin d'Henri")) {
+      if (pattern.test(node.textContent)) {
         let el = node.parentElement;
-        for (let i = 0; i < 5; i++) {
+        for (let i = 0; i < 6; i++) {
           if (!el) break;
           const style = window.getComputedStyle(el);
-          if (style.cursor === "pointer" || el.tagName === "A" || el.tagName === "BUTTON") { el.click(); return; }
+          if (style.cursor === "pointer" || el.tagName === "A" || el.tagName === "BUTTON") {
+            el.click();
+            return el.tagName + ": " + el.innerText?.substring(0, 50);
+          }
           el = el.parentElement;
         }
-        node.parentElement?.click(); return;
+        // Clique quand même sur le parent direct
+        node.parentElement?.click();
+        return "fallback: " + node.textContent.trim().substring(0, 50);
       }
     }
+    return null;
   });
+
+  if (found) {
+    console.log(`✅ Propriété cliquée: ${found}`);
+  } else {
+    console.log(`⚠️  Propriété non trouvée dans la page — on continue quand même`);
+  }
+
   await new Promise(r => setTimeout(r, 5000));
+  await takeDebugScreenshot(page, "apres_clic_propriete");
   console.log(`📍 URL dashboard: ${page.url()}`);
 }
 
