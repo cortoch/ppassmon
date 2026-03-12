@@ -85,75 +85,160 @@ async function screenshot(page, label) {
   } catch (e) {}
 }
 
-// ─── SCRAPING DU TABLEAU "Réservations du mois" ───────────────────────────────
-// Format observé dans la page :
-//   "Réservation Nb. de nuitées Revenu État"
-//   "28 Mars - 31 Mars 3 216.32 € A venir"
-async function scrapeReservationsTable(page, monthLabel) {
-  const rawText = await page.evaluate(() => {
-    const body = document.body.cloneNode(true);
-    body.querySelectorAll("script, style").forEach(el => el.remove());
-    return body.innerText;
-  });
+// ─── LECTURE DU "SÉJOUR SÉLECTIONNÉ" ────────────────────────────────────────
+// Lit les données affichées dans le panneau "Séjour sélectionné" après clic sur un jour
+function parseSejour(rawText, currentYear) {
+  // Format observé : "Séjour sélectionné Dates Nuitées Revenu Voyageur
+  //   28 Mars - 31 Mars 3 216.32 € Francisco M. - 3 voyageurs / 2 lits"
+  // Aussi disponible en version détaillée :
+  //   "Dates 28 Mars - 31 Mars Nuitées 3 Revenu 216.32 € Voyageur Francisco M..."
+  const sejourMatch = rawText.match(
+    /Dates\s*(\d{1,2}\s+[A-Za-z\u00C0-\u00FF]+\s*[-\u2013]\s*\d{1,2}\s+[A-Za-z\u00C0-\u00FF]+)\s*Nuit[e\u00e9]es?\s*(\d+)\s*Revenu\s*([\d\s.,]+\s*\u20ac)\s*Voyageur\s*([^\n\r]+)/
+  );
+  if (!sejourMatch) return null;
 
-  const excerpt = rawText.replace(/\s+/g, " ").trim().substring(0, 2000);
-  console.log(`  📄 Texte page (2000c): ${excerpt}`);
+  const dateRange = sejourMatch[1].trim();
+  const nuits = sejourMatch[2].trim();
+  const revenu = sejourMatch[3].replace(/\s/g, "").trim();
+  const voyageur = sejourMatch[4].trim().split(/[\n\r]/)[0].trim();
 
-  const reservations = [];
-  const currentYear = new Date().getFullYear();
-  const seen = new Set();
+  const rangeParts = dateRange.match(/(\d{1,2}\s+[A-Za-zÀ-ÿ]+)\s*[-–]\s*(\d{1,2}\s+[A-Za-zÀ-ÿ]+)/);
+  if (!rangeParts) return null;
 
-  // Pattern principal basé sur ce qu'on voit dans les logs :
-  // "28 Mars - 31 Mars 3 216.32 € A venir"
-  // On cherche : DATE - DATE ENTIER MONTANT€ ETAT
-  const pattern = /(\d{1,2}\s+[A-Za-zÀ-ÿ]+)\s*[-–]\s*(\d{1,2}\s+[A-Za-zÀ-ÿ]+)\s+(\d+)\s+([\d\s.,]+\s*€)\s+([^\d\n]+?)(?=\d{1,2}\s+[A-Za-zÀ-ÿ]|Bilan|Découvrir|$)/gs;
-
-  let match;
-  while ((match = pattern.exec(rawText)) !== null) {
-    const debutStr = match[1].trim();
-    const finStr   = match[2].trim();
-    const nuitsStr = match[3].trim();
-    const revenuStr = match[4].replace(/\s/g, "").trim(); // ex: "216.32€"
-    const etatStr  = match[5].replace(/\s+/g, " ").trim();
-
-    const dateDebut = parseFrDate(debutStr, currentYear);
-    let dateFin     = parseFrDate(finStr, currentYear);
-    if (dateDebut && dateFin && dateFin < dateDebut) {
-      dateFin = parseFrDate(finStr, currentYear + 1);
-    }
-
-    const isoKey = `${toISO(dateDebut)}-${toISO(dateFin)}`;
-    if (seen.has(isoKey)) continue;
-    seen.add(isoKey);
-
-    // Cherche le voyageur associé dans la section "Séjour sélectionné"
-    // Format: "VoyageurFrancisco M. - 3 voyageurs / 2 lits"
-    const voyageurMatch = rawText.match(/Voyageur\s*([A-Z][a-zA-ZÀ-ÿ\-]+\s+[A-Z]\.(?:[^\n\r]*)?)/);
-    const voyageur = voyageurMatch ? voyageurMatch[1].split(/\n|\r/)[0].trim() : null;
-
-    const res = {
-      debut: debutStr,
-      fin: finStr,
-      dateDebut: toISO(dateDebut),
-      dateFin: toISO(dateFin),
-      nuits: nuitsStr,
-      revenu: revenuStr,
-      voyageur,
-      plateforme: null,
-      etat: etatStr,
-    };
-
-    console.log(`   ✅ ${res.debut} → ${res.fin} | ${res.nuits}n | ${res.revenu} | ${res.voyageur || "?"} | ${res.etat}`);
-    reservations.push(res);
+  const debutStr = rangeParts[1].trim();
+  const finStr = rangeParts[2].trim();
+  const dateDebut = parseFrDate(debutStr, currentYear);
+  let dateFin = parseFrDate(finStr, currentYear);
+  if (dateDebut && dateFin && dateFin < dateDebut) {
+    dateFin = parseFrDate(finStr, currentYear + 1);
   }
 
-  if (reservations.length === 0) {
-    console.log(`   ℹ️  Aucune réservation trouvée pour ${monthLabel} (mois vide ou regex non matchée)`);
-  }
-  return reservations;
+  return {
+    debut: debutStr,
+    fin: finStr,
+    dateDebut: toISO(dateDebut),
+    dateFin: toISO(dateFin),
+    nuits,
+    revenu,
+    voyageur,
+    plateforme: null,
+    etat: "À venir",
+  };
 }
 
-// ─── NAVIGATION VERS UN MOIS VIA LE SELECT ───────────────────────────────────
+// ─── SCRAPING D'UN MOIS PAR CLIC SUR CHAQUE JOUR ────────────────────────────
+// Pour chaque jour du calendrier, on clique dessus et on lit "Séjour sélectionné"
+// C'est la seule méthode fiable pour les mois futurs
+async function scrapeMonthByClickingDays(page, monthLabel, calendarYear, calendarMonth) {
+  const currentYear = new Date().getFullYear();
+  const found = new Map(); // key = "dateDebut-dateFin" → reservation
+
+  // Récupère la liste des jours du calendrier affiché
+  const days = await page.evaluate(() => {
+    // FullCalendar expose les cellules via data-date (YYYY-MM-DD)
+    const cells = Array.from(document.querySelectorAll(".fc-daygrid-day[data-date]"));
+    if (cells.length > 0) {
+      return cells.map(c => c.getAttribute("data-date"));
+    }
+    // Fallback : cherche les cellules td avec data-date
+    const tdCells = Array.from(document.querySelectorAll("td[data-date]"));
+    return tdCells.map(c => c.getAttribute("data-date"));
+  });
+
+  if (days.length === 0) {
+    console.log(`  ⚠️  Aucune cellule data-date trouvée, tentative via numéros de jours`);
+    // Fallback : on clique les numéros de jours visibles dans le calendrier
+    return await scrapeMonthByClickingNumbers(page, monthLabel, calendarYear, calendarMonth);
+  }
+
+  console.log(`  📅 ${days.length} jours trouvés via data-date`);
+
+  for (const dayDate of days) {
+    // Clic sur la cellule du jour
+    const clicked = await page.evaluate((date) => {
+      const cell = document.querySelector(`.fc-daygrid-day[data-date="${date}"], td[data-date="${date}"]`);
+      if (!cell) return false;
+      cell.click();
+      // Essaie aussi de cliquer sur le lien/numéro à l'intérieur
+      const inner = cell.querySelector("a, .fc-daygrid-day-number, [class*='day-number']");
+      if (inner) inner.click();
+      return true;
+    }, dayDate);
+
+    if (!clicked) continue;
+    await new Promise(r => setTimeout(r, 800));
+
+    // Lit le panneau "Séjour sélectionné"
+    const rawText = await page.evaluate(() => {
+      const body = document.body.cloneNode(true);
+      body.querySelectorAll("script, style").forEach(el => el.remove());
+      return body.innerText;
+    });
+
+    const sejour = parseSejour(rawText, currentYear);
+    if (sejour && sejour.dateDebut) {
+      const key = `${sejour.dateDebut}-${sejour.dateFin}`;
+      if (!found.has(key)) {
+        found.set(key, sejour);
+        console.log(`   ✅ Clic ${dayDate} → ${sejour.debut} → ${sejour.fin} | ${sejour.nuits}n | ${sejour.revenu} | ${sejour.voyageur}`);
+      }
+    }
+  }
+
+  const results = Array.from(found.values());
+  console.log(`  📊 ${results.length} réservation(s) unique(s) pour ${monthLabel}`);
+  return results;
+}
+
+// Fallback si pas de data-date : clic sur les numéros de jours
+async function scrapeMonthByClickingNumbers(page, monthLabel, calendarYear, calendarMonth) {
+  const currentYear = new Date().getFullYear();
+  const found = new Map();
+  const daysInMonth = new Date(calendarYear, calendarMonth, 0).getDate();
+
+  console.log(`  📅 Clic sur ${daysInMonth} numéros de jours...`);
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const clicked = await page.evaluate((dayNum) => {
+      // Cherche les éléments qui contiennent le numéro du jour dans le calendrier
+      // Exclure les éléments en dehors du calendrier (stats, textes)
+      const cal = document.querySelector(".fc, [class*='calendar'], [class*='cal-']");
+      if (!cal) return false;
+      const links = Array.from(cal.querySelectorAll("a, [class*='day-number'], td"));
+      for (const el of links) {
+        if (el.innerText?.trim() === String(dayNum)) {
+          el.click();
+          return true;
+        }
+      }
+      return false;
+    }, day);
+
+    if (!clicked) continue;
+    await new Promise(r => setTimeout(r, 600));
+
+    const rawText = await page.evaluate(() => {
+      const body = document.body.cloneNode(true);
+      body.querySelectorAll("script, style").forEach(el => el.remove());
+      return body.innerText;
+    });
+
+    const sejour = parseSejour(rawText, currentYear);
+    if (sejour && sejour.dateDebut) {
+      const key = `${sejour.dateDebut}-${sejour.dateFin}`;
+      if (!found.has(key)) {
+        found.set(key, sejour);
+        console.log(`   ✅ Jour ${day} → ${sejour.debut} → ${sejour.fin} | ${sejour.nuits}n | ${sejour.revenu} | ${sejour.voyageur}`);
+      }
+    }
+  }
+
+  const results = Array.from(found.values());
+  console.log(`  📊 ${results.length} réservation(s) pour ${monthLabel}`);
+  return results;
+}
+
+// ─── NAVIGATION VERS UN MOIS VIA LE CALENDRIER ───────────────────────────────
 // Retourne le mois/année actuellement affiché dans le calendrier
 async function getCurrentCalendarMonth(page) {
   return await page.evaluate(() => {
@@ -171,20 +256,7 @@ async function navigateToMonth(page, year, month) {
     .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   console.log(`  🗓️  Navigation vers ${monthFr} ${year}...`);
 
-  // Dump de tous les boutons pour debug
-  const debugInfo = await page.evaluate(() => {
-    const btns = Array.from(document.querySelectorAll("button, [role='button']"));
-    return btns.map(b => ({
-      text: (b.innerText || "").trim().substring(0, 40),
-      cls: (b.className || "").substring(0, 60),
-      aria: b.getAttribute("aria-label") || "",
-      inNav: !!b.closest("nav, header, aside"),
-    }));
-  });
-  console.log(`  🔍 Tous les boutons: ${JSON.stringify(debugInfo)}`);
-
   for (let attempt = 0; attempt < 8; attempt++) {
-    // Vérifie le mois actuellement affiché
     const current = await getCurrentCalendarMonth(page);
     const currentNorm = (current || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     console.log(`  📅 Mois affiché: "${current}" (cible: "${targetLabel}")`);
@@ -194,46 +266,24 @@ async function navigateToMonth(page, year, month) {
       return;
     }
 
-    // Clic sur le bouton suivant du calendrier (hors nav principale)
     const clicked = await page.evaluate(() => {
       const candidates = Array.from(document.querySelectorAll("button, [role='button']"))
-        .filter(b => !b.closest("nav, header, aside, [class*='sidebar'], [class*='menu'], [class*='navbar']"));
-
-      // Priorité 1 : bouton avec flèche comme seul contenu
-      for (const btn of candidates) {
-        const txt = (btn.innerText || "").trim();
-        if (/^[>›»→▶]$/.test(txt)) {
-          btn.click();
-          return `arrow-text: "${txt}"`;
-        }
-      }
-
-      // Priorité 2 : classe ou aria-label contenant next/right/forward/suivant
+        .filter(b => !b.closest("nav, header, aside"));
       for (const btn of candidates) {
         const cls = (btn.className || "").toLowerCase();
         const aria = (btn.getAttribute("aria-label") || "").toLowerCase();
-        if (/next|right|forward|suivant|after/.test(cls + aria)) {
+        if (/next|forward|suivant/.test(cls + aria)) {
           btn.click();
-          return `class/aria: cls="${cls.substring(0,40)}" aria="${aria}"`;
+          return `cls="${cls.substring(0,40)}" aria="${aria}"`;
         }
       }
-
-      // Priorité 3 : dernier bouton de la liste hors nav (souvent ">" dans calendrier "< Mois >")
-      if (candidates.length >= 2) {
-        const last = candidates[candidates.length - 1];
-        last.click();
-        return `last-cal-btn: text="${(last.innerText||"").trim().substring(0,30)}" cls="${(last.className||"").substring(0,40)}"`;
-      }
-
       return null;
     });
 
-    console.log(`  🖱️  Clic attempt ${attempt + 1}: ${clicked || "rien trouvé"}`);
-    if (!clicked) break;
+    if (!clicked) { console.log(`  ⚠️  Bouton suivant non trouvé`); break; }
+    console.log(`  🖱️  Clic attempt ${attempt + 1}: ${clicked}`);
     await new Promise(r => setTimeout(r, 2500));
   }
-
-  await screenshot(page, `mois_${month}`);
 }
 
 // ─── LOGIN ────────────────────────────────────────────────────────────────────
@@ -328,7 +378,7 @@ async function scrapePasspass() {
         await navigateToMonth(page, y, m);
       }
 
-      const monthRes = await scrapeReservationsTable(page, label);
+      const monthRes = await scrapeMonthByClickingDays(page, label, y, m);
 
       for (const r of monthRes) {
         const key = `${r.dateDebut}-${r.dateFin}`;
