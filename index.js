@@ -303,52 +303,85 @@ async function login(page) {
 
 // ─── NAVIGATION VERS LA PROPRIÉTÉ ────────────────────────────────────────────
 async function navigateToProperty(page) {
-  // Attendre que la page soit chargée (au moins un titre ou contenu visible)
   await new Promise(r => setTimeout(r, 3000));
-  await takeDebugScreenshot(page, "accueil");
 
-  // Dump du texte visible pour debug
-  const pageText = await page.evaluate(() => {
-    const body = document.body.cloneNode(true);
-    body.querySelectorAll("script, style").forEach(el => el.remove());
-    return body.innerText.replace(/\s+/g, " ").trim().substring(0, 1000);
-  });
-  console.log(`📄 Contenu page accueil (1000c): ${pageText}`);
-
-  // Cherche "jardin" (insensible à la casse + accents) ou n'importe quelle propriété cliquable
-  const found = await page.evaluate(() => {
-    const pattern = /jardin|henri|passpass|property|logement/i;
+  // ÉTAPE 1 : Cliquer sur "Mes locations" dans le menu
+  console.log("📂 Clic sur 'Mes locations'...");
+  const clickedMenu = await page.evaluate(() => {
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     let node;
     while ((node = walker.nextNode())) {
-      if (pattern.test(node.textContent)) {
+      if (/mes\s+locations/i.test(node.textContent.trim())) {
         let el = node.parentElement;
-        for (let i = 0; i < 6; i++) {
+        for (let i = 0; i < 5; i++) {
           if (!el) break;
-          const style = window.getComputedStyle(el);
-          if (style.cursor === "pointer" || el.tagName === "A" || el.tagName === "BUTTON") {
+          if (el.tagName === "A" || el.tagName === "BUTTON" || window.getComputedStyle(el).cursor === "pointer") {
             el.click();
-            return el.tagName + ": " + el.innerText?.substring(0, 50);
+            return el.href || el.tagName + ": " + el.innerText?.trim().substring(0, 40);
           }
           el = el.parentElement;
         }
-        // Clique quand même sur le parent direct
         node.parentElement?.click();
-        return "fallback: " + node.textContent.trim().substring(0, 50);
+        return "fallback: " + node.textContent.trim();
       }
     }
     return null;
   });
 
-  if (found) {
-    console.log(`✅ Propriété cliquée: ${found}`);
+  if (clickedMenu) {
+    console.log(`✅ Menu cliqué: ${clickedMenu}`);
   } else {
-    console.log(`⚠️  Propriété non trouvée dans la page — on continue quand même`);
+    console.log("⚠️  Menu 'Mes locations' non trouvé, tentative navigation directe...");
+    await page.goto("https://client.passpass.io/mes-locations", { waitUntil: "networkidle2", timeout: 15000 }).catch(() => {});
+  }
+
+  await new Promise(r => setTimeout(r, 4000));
+  await takeDebugScreenshot(page, "mes_locations");
+  console.log(`📍 URL après menu: ${page.url()}`);
+
+  // Log du contenu pour debug
+  const pageText = await page.evaluate(() => {
+    const body = document.body.cloneNode(true);
+    body.querySelectorAll("script, style").forEach(el => el.remove());
+    return body.innerText.replace(/\s+/g, " ").trim().substring(0, 1500);
+  });
+  console.log(`📄 Contenu 'Mes locations' (1500c): ${pageText}`);
+
+  // ÉTAPE 2 : Cliquer sur "Le jardin d'Henri" (ou la première propriété trouvée)
+  console.log("🏠 Clic sur la propriété...");
+  const clickedProp = await page.evaluate(() => {
+    const patterns = [/jardin/i, /henri/i, /location/i, /logement/i, /appartement/i, /maison/i, /villa/i];
+    for (const pattern of patterns) {
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      let node;
+      while ((node = walker.nextNode())) {
+        if (pattern.test(node.textContent.trim()) && node.textContent.trim().length > 3) {
+          let el = node.parentElement;
+          for (let i = 0; i < 6; i++) {
+            if (!el) break;
+            if (el.tagName === "A" || el.tagName === "BUTTON" || window.getComputedStyle(el).cursor === "pointer") {
+              el.click();
+              return el.href || el.tagName + ": " + (el.innerText?.trim().substring(0, 60));
+            }
+            el = el.parentElement;
+          }
+          node.parentElement?.click();
+          return "fallback: " + node.textContent.trim().substring(0, 60);
+        }
+      }
+    }
+    return null;
+  });
+
+  if (clickedProp) {
+    console.log(`✅ Propriété cliquée: ${clickedProp}`);
+  } else {
+    console.log("⚠️  Propriété non trouvée dans 'Mes locations'");
   }
 
   await new Promise(r => setTimeout(r, 5000));
   await takeDebugScreenshot(page, "apres_clic_propriete");
-  console.log(`📍 URL dashboard: ${page.url()}`);
+  console.log(`📍 URL dashboard propriété: ${page.url()}`);
 }
 
 // ─── NAVIGATION ENTRE LES MOIS ────────────────────────────────────────────────
