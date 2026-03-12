@@ -129,7 +129,7 @@ function parseSejour(rawText, currentYear) {
 // ─── SCRAPING D'UN MOIS PAR CLIC SUR CHAQUE JOUR ────────────────────────────
 // Pour chaque jour du calendrier, on clique dessus et on lit "Séjour sélectionné"
 // C'est la seule méthode fiable pour les mois futurs
-async function scrapeMonthByClickingDays(page, monthLabel) {
+async function scrapeMonthByClickingDays(page, monthLabel, calendarYear, calendarMonth) {
   const currentYear = new Date().getFullYear();
   const found = new Map();
 
@@ -154,11 +154,9 @@ async function scrapeMonthByClickingDays(page, monthLabel) {
     return parseSejour(raw, currentYear);
   }
 
-  // Commence avec lastKey vide : ainsi le PREMIER séjour affiché sera aussi capturé
   let lastKey = "";
 
   for (const dayDate of days) {
-    // Clique la cellule et le numéro intérieur
     await page.evaluate((date) => {
       const cell = document.querySelector(`.fc-daygrid-day[data-date="${date}"]`);
       if (!cell) return;
@@ -173,13 +171,25 @@ async function scrapeMonthByClickingDays(page, monthLabel) {
     if (!sejour || !sejour.dateDebut) continue;
 
     const key = `${sejour.dateDebut}-${sejour.dateFin}`;
+    if (key === lastKey) continue;
+    lastKey = key;
 
-    if (key !== lastKey) {
-      lastKey = key;
-      if (!found.has(key)) {
-        found.set(key, sejour);
-        console.log(`   🆕 ${dayDate} → ${sejour.debut} - ${sejour.fin} | ${sejour.nuits}n | ${sejour.revenu} | ${sejour.voyageur || "?"}`);
-      }
+    // ✅ FILTRE CLÉ : le séjour doit chevaucher le mois en cours
+    // (dateDebut <= fin du mois ET dateFin >= début du mois)
+    const moisDebut = new Date(calendarYear, calendarMonth - 1, 1);
+    const moisFin = new Date(calendarYear, calendarMonth, 0); // dernier jour du mois
+    const sejourDebut = new Date(sejour.dateDebut);
+    const sejourFin = new Date(sejour.dateFin);
+    const chevauche = sejourDebut <= moisFin && sejourFin >= moisDebut;
+
+    if (!chevauche) {
+      console.log(`   ⏭️  ${dayDate} → ${sejour.debut} - ${sejour.fin} (hors mois ${monthLabel}, ignoré)`);
+      continue;
+    }
+
+    if (!found.has(key)) {
+      found.set(key, sejour);
+      console.log(`   🆕 ${dayDate} → ${sejour.debut} - ${sejour.fin} | ${sejour.nuits}n | ${sejour.revenu} | ${sejour.voyageur || "?"}`);
     }
   }
 
@@ -376,7 +386,7 @@ async function scrapePasspass() {
         await navigateToMonth(page, y, m);
       }
 
-      const monthRes = await scrapeMonthByClickingDays(page, label);
+      const monthRes = await scrapeMonthByClickingDays(page, label, y, m);
 
       for (const r of monthRes) {
         const key = `${r.dateDebut}-${r.dateFin}`;
