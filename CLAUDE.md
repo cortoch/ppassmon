@@ -94,6 +94,12 @@ Regex :
 /Dates\s*(\d{1,2}\s+[A-Za-z\u00C0-\u00FF]+\s*[-\u2013]\s*\d{1,2}\s+[A-Za-z\u00C0-\u00FF]+)\s*Nuit[e\u00e9]es?\s*(\d+)\s*Revenu\s*([\d\s.,]+\s*\u20ac)\s*Voyageur\s*([^\n\r]+)/
 ```
 
+⚠️ **Le champ voyageur capte aussi le texte du tableau "Réservations du mois"** qui suit immédiatement dans le `innerText` du body — par ex. `Francisco M. - 3 voyageurs / 2 litsRéservations du moisMai 2026...`. Il faut couper à `"Réservations du mois"` :
+
+```js
+voyageur: m[4].trim().split(/R[eé]servations\s+du\s+mois/i)[0].split(/[\n\r]/)[0].trim()
+```
+
 ---
 
 ## GitHub Actions
@@ -131,6 +137,19 @@ restore-keys: passpass-state-
 ```
 
 Chrome : `google-chrome-stable` via `apt-get`, path `/usr/bin/google-chrome-stable`.
+
+---
+
+## Email de notification — Structure
+
+L'email est envoyé dès que le hash des réservations change. Il contient dans l'ordre :
+
+1. **🆕 Nouvelles réservations** — séjours dont la clé `dateDebut-dateFin` est absente de l'état précédent
+2. **❌ Réservations annulées** — séjours présents avant mais disparus
+3. **🔄 Réservations modifiées** — même clé date, mais un champ a changé (`voyageur`, `revenu`, `nuits`, `etat`). Affiché avec l'ancien et le nouveau : `<s>ancien</s> → <b>nouveau</b>`
+4. **📋 Tableau récapitulatif** — toutes les réservations, avec surlignage :
+   - 🟢 fond vert clair : nouvelle réservation
+   - 🟠 fond orange clair : réservation modifiée
 
 ---
 
