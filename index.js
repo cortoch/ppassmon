@@ -96,7 +96,7 @@ function parseSejour(rawText, currentYear) {
     dateFin: toISO(dateFin),
     nuits: m[2].trim(),
     revenu: m[3].replace(/\s/g, "").trim(),
-    voyageur: m[4].trim().split(/[\n\r]/)[0].trim(),
+    voyageur: m[4].trim().split(/R[eé]servations\s+du\s+mois/i)[0].split(/[\n\r]/)[0].trim(),
     plateforme: null,
     etat: "À venir",
   };
@@ -314,6 +314,28 @@ async function sendEmail(previousAllRes, allReservations) {
     html += `</ul>`;
   }
 
+  // Réservations modifiées (même clé date, mais un champ a changé)
+  const modifiedRes = [];
+  for (const r of allReservations) {
+    const key = `${r.dateDebut}-${r.dateFin}`;
+    if (!previousKeys.has(key)) continue;
+    const prev = previousAllRes.find(p => `${p.dateDebut}-${p.dateFin}` === key);
+    if (!prev) continue;
+    const diffs = [];
+    if (prev.voyageur !== r.voyageur) diffs.push(`Voyageur : <s>${prev.voyageur||"?"}</s> → <b>${r.voyageur||"?"}</b>`);
+    if (prev.revenu   !== r.revenu)   diffs.push(`Revenu : <s>${prev.revenu||"?"}</s> → <b>${r.revenu||"?"}</b>`);
+    if (prev.nuits    !== r.nuits)    diffs.push(`Nuits : <s>${prev.nuits||"?"}</s> → <b>${r.nuits||"?"}</b>`);
+    if (prev.etat     !== r.etat)     diffs.push(`État : <s>${prev.etat||"?"}</s> → <b>${r.etat||"?"}</b>`);
+    if (diffs.length > 0) modifiedRes.push({ r, diffs });
+  }
+  if (modifiedRes.length > 0) {
+    html += `<h3>🔄 Réservations modifiées :</h3><ul>`;
+    for (const { r, diffs } of modifiedRes) {
+      html += `<li>📅 <b>${r.debut}</b> → <b>${r.fin}</b> — ${diffs.join(" / ")}</li>`;
+    }
+    html += `</ul>`;
+  }
+
   const totalRevenu = allReservations
     .map(r => parseFloat((r.revenu || "").replace(/[^\d.,]/g, "").replace(",", ".")))
     .filter(n => !isNaN(n) && n > 0).reduce((a, b) => a + b, 0);
@@ -322,10 +344,14 @@ async function sendEmail(previousAllRes, allReservations) {
   html += `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:sans-serif;font-size:13px;">`;
   html += `<tr style="background:#f0f0f0"><th>Dates</th><th>Nuits</th><th>Revenu</th><th>Voyageur</th><th>État</th><th>Agenda</th></tr>`;
   for (const r of allReservations) {
+    const key = `${r.dateDebut}-${r.dateFin}`;
+    const isNew = newRes.some(n => `${n.dateDebut}-${n.dateFin}` === key);
+    const isMod = modifiedRes.some(m => `${m.r.dateDebut}-${m.r.dateFin}` === key);
+    const rowStyle = isNew ? ' style="background:#e8f5e9"' : isMod ? ' style="background:#fff3e0"' : '';
     const g = buildGCalLink(r);
     const eL = r.etat.toLowerCase();
     const em = eL.includes("cours") ? "🟠" : eL.includes("attente") ? "🟡" : eL.includes("venir") ? "🔵" : eL.includes("termin") ? "✅" : eL.includes("annul") ? "❌" : "🔵";
-    html += `<tr><td><b>${r.debut}</b> → ${r.fin}</td><td>${r.nuits||"?"}</td><td>${r.revenu||"?"}</td><td>${r.voyageur||"?"}</td><td>${em} ${r.etat}</td>`;
+    html += `<tr${rowStyle}><td><b>${r.debut}</b> → ${r.fin}</td><td>${r.nuits||"?"}</td><td>${r.revenu||"?"}</td><td>${r.voyageur||"?"}</td><td>${em} ${r.etat}</td>`;
     html += `<td>${g ? `<a href="${g}" style="background:#4285F4;color:white;padding:2px 8px;border-radius:4px;text-decoration:none;font-size:11px;">📅</a>` : ""}</td></tr>`;
   }
   html += `</table>`;
