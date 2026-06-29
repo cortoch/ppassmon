@@ -75,22 +75,10 @@ async function getJwtToken() {
   try {
     const page = await browser.newPage();
 
-    // Intercepter les requêtes XHR pour récupérer le token au vol
-    let capturedToken = null;
-    await page.setRequestInterception(true);
-    page.on("request", req => {
-      const auth = req.headers()["authorization"];
-      if (auth && auth.startsWith("Bearer ") && !capturedToken) {
-        capturedToken = auth.replace("Bearer ", "").trim();
-        console.log("🔑 Token capturé via requête interceptée");
-      }
-      req.continue();
-    });
-
     console.log("🌐 Navigation vers le portail...");
     await page.goto(`${PORTAL_URL}/login`, { waitUntil: "networkidle2", timeout: 30000 });
 
-    // Remplir email
+    // Remplir email + password
     await page.waitForSelector("input[type='email'], input[name='email'], #email", { timeout: 10000 });
     await page.evaluate((email, password) => {
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
@@ -116,19 +104,17 @@ async function getJwtToken() {
     if (page.url().includes("login")) throw new Error("Login échoué — vérifier les identifiants");
     console.log(`✅ Connecté : ${page.url()}`);
 
-    // Récupérer le token depuis localStorage si pas encore capturé
-    if (!capturedToken) {
-      capturedToken = await page.evaluate(() => localStorage.getItem("token"));
-    }
+    // 1. Récupérer le token depuis localStorage (source la plus fiable)
+    let capturedToken = await page.evaluate(() => localStorage.getItem("token"));
 
-    // Naviguer vers le calendrier pour déclencher les requêtes si token toujours absent
-    if (!capturedToken) {
+    // 2. Si absent, naviguer vers le calendrier pour forcer le chargement
+    if (!capturedToken || capturedToken.length < 20) {
       await page.goto(`${PORTAL_URL}/my-properties/${LISTING_ID}/calendar`, { waitUntil: "networkidle2", timeout: 20000 });
       await new Promise(r => setTimeout(r, 3000));
       capturedToken = await page.evaluate(() => localStorage.getItem("token"));
     }
 
-    if (!capturedToken) throw new Error("Impossible de récupérer le JWT token");
+    if (!capturedToken || capturedToken.length < 20) throw new Error("Impossible de récupérer le JWT token");
     console.log(`🔑 Token OK (${capturedToken.length} chars)`);
     return capturedToken;
 
