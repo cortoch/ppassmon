@@ -68,10 +68,17 @@ async function scrapeGuesty() {
       try {
         const body = await response.json();
         if (url.includes("/calendar")) {
-          // Fusionner tous les mois capturés
           const days = Array.isArray(body) ? body : (body.days || body.data || []);
           if (!captured.calendarDays) captured.calendarDays = [];
           captured.calendarDays.push(...days);
+          // Logger un jour booked pour voir sa structure complète
+          if (!captured._loggedBooked) {
+            const bookedDay = days.find(d => d.status === "booked" || d.blocks?.b);
+            if (bookedDay) {
+              console.log(`  🔬 Jour booked sample: ${JSON.stringify(bookedDay)}`);
+              captured._loggedBooked = true;
+            }
+          }
           captured.calendar = body;
         } else if (url.includes("/owners/me/reservations") || url.includes("/v2/reservations")) {
           captured.reservations = body;
