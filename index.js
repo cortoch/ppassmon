@@ -67,17 +67,17 @@ async function scrapeGuesty() {
       try {
         const body = await response.json();
         if (url.includes("/calendar")) {
-          const s = JSON.stringify(body);
-          const keys = Array.isArray(body) ? `array[${body.length}]` : Object.keys(body).join(",");
-          console.log(`  📥 calendar ${s.length}c keys=${keys} sample=${s.substring(0,300)}`);
+          // Fusionner tous les mois capturés
+          const days = Array.isArray(body) ? body : (body.days || body.data || []);
+          if (!captured.calendarDays) captured.calendarDays = [];
+          captured.calendarDays.push(...days);
           captured.calendar = body;
         } else if (url.includes("/owners/me/reservations") || url.includes("/v2/reservations")) {
-          console.log(`  📥 reservations: ${JSON.stringify(body)}`);
           captured.reservations = body;
-        } else if (url.includes("revenue-analytics")) {
-          const rid = body?.data?.[0]?.reservationId || body?.results?.[0]?.reservationId || "?";
-          console.log(`  📥 revenue-analytics: ${JSON.stringify(body).substring(0,200)}`);
-          captured.revenue = body;
+        } else if (url.includes("revenue-analytics") && Array.isArray(body) && body[0]?.reservationId) {
+          // Capturer les données revenue avec reservationId
+          if (!captured.revenueItems) captured.revenueItems = [];
+          captured.revenueItems.push(...body);
         }
       } catch(e) { /* pas JSON */ }
     });
@@ -135,56 +135,59 @@ async function scrapeGuesty() {
     const allReservations = [];
     const seenIds = new Set();
 
-    // Depuis la liste directe si capturée
-    if (captured.reservations) {
-      const list = captured.reservations.results || captured.reservations.data || captured.reservations.reservations || (Array.isArray(captured.reservations) ? captured.reservations : []);
-      console.log(`  📋 Liste réservations : ${list.length} entrée(s)`);
-      for (const r of list) {
-        const id = r._id || r.id;
-        if (!id || seenIds.has(id)) continue;
-        seenIds.add(id);
-        const checkIn  = (r.checkInDateLocalized  || r.checkIn  || r.checkInDate  || "").slice(0, 10);
-        const checkOut = (r.checkOutDateLocalized || r.checkOut || r.checkOutDate || "").slice(0, 10);
-        allReservations.push({
-          id, checkIn, checkOut,
-          nights: r.nightsCount || r.nights || null,
-          guestName: r.guestName || (r.guest ? `${r.guest.firstName||""} ${r.guest.lastName||""}`.trim() : null) || null,
-          source: r.source || r.channel || null,
-          status: r.status || null,
-          ownerRevenue: r.ownerRevenue ?? r.money?.ownerRevenue ?? null,
-        });
-      }
+    // Construire la map revenue : reservationId -> ownerRevenue
+    const revenueMap = {};
+    for (const item of (captured.revenueItems || [])) {
+      const id = item.reservationId;
+      if (id) revenueMap[id] = item.accountBased?.revenue ?? item.reservationBased?.revenue ?? null;
     }
+    console.log(`  💰 ${Object.keys(revenueMap).length} revenu(s) capturé(s)`);
 
-    // Depuis le calendrier si capturé (et rien dans la liste)
-    if (allReservations.length === 0 && captured.calendar) {
-      const days = Array.isArray(captured.calendar) ? captured.calendar : (captured.calendar.days || captured.calendar.data || []);
-      const resIds = [...new Set(days.filter(d => d.reservationId).map(d => d.reservationId))];
-      console.log(`  📅 Calendrier : ${days.length} jours, ${resIds.length} réservation(s)`);
-      for (const resId of resIds) {
-        if (seenIds.has(resId)) continue;
-        seenIds.add(resId);
-        const resDays = days.filter(d => d.reservationId === resId).map(d => d.date).sort();
+    // Construire les réservations depuis les jours du calendrier (status=booked, blocks.b=true)
+    const allDays = captured.calendarDays || [];
+    console.log(`  📅 ${allDays.length} jours de calendrier capturés`);
+
+    // Regrouper les jours consécutifs "booked" en séjours
+    const bookedDays = allDays.filter(d => d.status === "booked" || d.blocks?.b === true).map(d => d.date).sort();
+    console.log(`  🟢 ${bookedDays.length} jours réservés`);
+
+    // Trouver les séjours : séquences de jours consécutifs
+    const stays = [];
+    let stayStart = null, prevDate = null;
+    for (const date of bookedDays) {
+      if (!prevDate) { stayStart = date; prevDate = date; continue; }
+      const prev = new Date(prevDate + "T00:00:00");
+      const curr = new Date(date + "T00:00:00");
+      const diff = (curr - prev) / 86400000;
+      if (diff > 1) {
+        // Fin du séjour précédent
+        stays.push({ checkIn: stayStart, checkOut: prevDate });
+        stayStart = date;
+      }
+      prevDate = date;
+    }
+    if (stayStart) stays.push({ checkIn: stayStart, checkOut: prevDate });
+
+    console.log(`  🏨 ${stays.length} séjour(s) détecté(s)`);
+
+    // Associer les revenus aux séjours par ordre chronologique
+    const revenueIds = Object.keys(revenueMap).sort();
+    for (let i = 0; i < stays.length; i++) {
+      const stay = stays[i];
+      const id = revenueIds[i] || `stay-${stay.checkIn}`;
+      const nights = Math.round((new Date(stay.checkOut+"T00:00:00") - new Date(stay.checkIn+"T00:00:00")) / 86400000) + 1;
+      if (!seenIds.has(stay.checkIn)) {
+        seenIds.add(stay.checkIn);
         allReservations.push({
-          id: resId,
-          checkIn: resDays[0] || null,
-          checkOut: resDays[resDays.length - 1] || null,
-          nights: resDays.length,
+          id,
+          checkIn: stay.checkIn,
+          checkOut: stay.checkOut,
+          nights,
           guestName: null,
           source: null,
           status: "confirmed",
-          ownerRevenue: null,
+          ownerRevenue: revenueMap[id] ?? null,
         });
-      }
-    }
-
-    // Enrichir avec les revenus si capturés
-    if (captured.revenue) {
-      const items = captured.revenue.data || captured.revenue.results || (Array.isArray(captured.revenue) ? captured.revenue : []);
-      for (const item of items) {
-        const id = item.reservationId || item._id;
-        const res = allReservations.find(r => r.id === id);
-        if (res) res.ownerRevenue = item.ownerRevenue ?? item.owner_revenue ?? item.revenue ?? res.ownerRevenue;
       }
     }
 
