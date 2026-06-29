@@ -268,14 +268,30 @@ async function scrapeGuesty() {
         const sourceMap = { airbnb2: "Airbnb", airbnb: "Airbnb", "booking.com": "Booking.com", direct: "Direct" };
         const source = sourceMap[res.source] || res.source || null;
 
-        allReservations.push({ id, checkIn, checkOut, nights, guestName: null, source, status: res.status || "confirmed", ownerRevenue });
+        // Logger le contenu de res une fois pour voir les champs disponibles
+        if (!captured._loggedRes) {
+          console.log(`  🔬 res sample: ${JSON.stringify(res).substring(0, 500)}`);
+          captured._loggedRes = true;
+        }
+
+        allReservations.push({
+          id,
+          checkIn, checkOut, nights,
+          guestId: res.guestId || null,
+          guestName: null, // sera ajouté si Julie fournit l'endpoint guests
+          source, status: res.status || "confirmed",
+          ownerRevenue,
+          confirmationCode: res.confirmationCode || null,
+          guests: res.guests ?? res.guestsCount ?? null,
+          money: res.money ? JSON.stringify(res.money).substring(0, 200) : null,
+        });
       }
     }
     console.log(`  🏨 ${allReservations.length} réservation(s) depuis blockRefs`);
 
     allReservations.sort((a, b) => (a.checkIn || "").localeCompare(b.checkIn || ""));
     console.log(`\n📊 Total : ${allReservations.length} réservation(s)`);
-    allReservations.forEach(r => console.log(`  🏨 ${r.checkIn} → ${r.checkOut} | ${r.nights}n | ${r.ownerRevenue != null ? r.ownerRevenue + "€" : "?€"} | ${r.guestName || "?"} | ${r.source || "?"}`));
+    allReservations.forEach(r => console.log(`  🏨 ${r.checkIn} → ${r.checkOut} | ${r.nights}n | ${r.ownerRevenue != null ? r.ownerRevenue + "€" : "?€"} | ${r.source || "?"} | guestId=${r.guestId||"?"} | code=${r.confirmationCode||"?"} | guests=${r.guests??'?'}`));
     return allReservations;
 
   } finally {
@@ -310,7 +326,7 @@ async function sendEmail(prevReservations, allReservations) {
     html += `<h3>🆕 Nouvelles réservations :</h3><ul>`;
     for (const r of newRes) {
       const g = buildGCalLink(r);
-      html += `<li>🏠 <b>${fmtDate(r.checkIn)}</b> → <b>${fmtDate(r.checkOut)}</b> (${r.nights||"?"}n) — <b>${r.ownerRevenue != null ? r.ownerRevenue + " €" : "?"}</b> — ${r.guestName||"?"} — ${r.source||"?"} — ${r.status||"?"}`;
+      html += `<li>🏠 <b>${fmtDate(r.checkIn)}</b> → <b>${fmtDate(r.checkOut)}</b> (${r.nights||"?"}n) — <b>${r.ownerRevenue != null ? r.ownerRevenue + " €" : "?"}</b> — ${r.source||"?"} — code: ${r.confirmationCode||"?"} — guestId: ${r.guestId||"?"} — ${r.guests??'?'} voyageur(s)`;
       if (g) html += ` &nbsp;<a href="${g}" style="background:#4285F4;color:white;padding:3px 10px;border-radius:4px;text-decoration:none;font-size:12px;">📅 Agenda</a>`;
       html += `</li>`;
     }
@@ -329,14 +345,14 @@ async function sendEmail(prevReservations, allReservations) {
 
   html += `<h3>📋 Toutes les réservations (${allReservations.length}) :</h3>`;
   html += `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:sans-serif;font-size:13px;">`;
-  html += `<tr style="background:#f0f0f0"><th>Arrivée</th><th>Départ</th><th>Nuits</th><th>Revenu propriétaire</th><th>Voyageur</th><th>Plateforme</th><th>État</th><th>Agenda</th></tr>`;
+  html += `<tr style="background:#f0f0f0"><th>Arrivée</th><th>Départ</th><th>Nuits</th><th>Revenu propriétaire</th><th>GuestId</th><th>Voyageurs</th><th>Plateforme</th><th>Code</th><th>État</th><th>Agenda</th></tr>`;
   for (const r of allReservations) {
     const isNew = newRes.some(n => n.id === r.id);
     const isMod = modifiedRes.some(m => m.r.id === r.id);
     const rowStyle = isNew ? ' style="background:#e8f5e9"' : isMod ? ' style="background:#fff3e0"' : '';
     const g = buildGCalLink(r);
     const ico = (r.status||"").toLowerCase().includes("cancel") ? "❌" : "✅";
-    html += `<tr${rowStyle}><td><b>${fmtDate(r.checkIn)}</b></td><td>${fmtDate(r.checkOut)}</td><td>${r.nights||"?"}</td><td><b>${r.ownerRevenue != null ? r.ownerRevenue + " €" : "?"}</b></td><td>${r.guestName||"?"}</td><td>${r.source||"?"}</td><td>${ico} ${r.status||"?"}</td><td>${g ? `<a href="${g}" style="background:#4285F4;color:white;padding:2px 8px;border-radius:4px;text-decoration:none;font-size:11px;">📅</a>` : ""}</td></tr>`;
+    html += `<tr${rowStyle}><td><b>${fmtDate(r.checkIn)}</b></td><td>${fmtDate(r.checkOut)}</td><td>${r.nights||"?"}</td><td><b>${r.ownerRevenue != null ? r.ownerRevenue + " €" : "?"}</b></td><td style="font-size:11px;color:#666">${r.guestId||"?"}</td><td>${r.guests??'?'}</td><td>${r.source||"?"}</td><td style="font-size:11px">${r.confirmationCode||"?"}</td><td>${ico} ${r.status||"?"}</td><td>${g ? `<a href="${g}" style="background:#4285F4;color:white;padding:2px 8px;border-radius:4px;text-decoration:none;font-size:11px;">📅</a>` : ""}</td></tr>`;
   }
   html += `</table>`;
   const totalRevenu = allReservations.map(r => parseFloat(r.ownerRevenue)||0).reduce((a,b)=>a+b,0);
