@@ -13,8 +13,6 @@ const EMAIL_PASSWORD  = process.env.EMAIL_PASSWORD  || "REMPLACE";
 const LISTING_ID   = "69e5e471e72c790015c810de";
 const OWNER_ID     = "69ef0aceb851941a87f7042d";
 const PORTAL_URL   = "https://mercijulie.guestyowners.com";
-const API_BASE     = "https://app.guesty.com/api";
-const G_AID_CS     = "G-89C7E-9FB65-B6F69";
 const CACHE_FILE   = "state.json";
 const MONTHS_AHEAD = 6;
 
@@ -46,115 +44,10 @@ function buildGCalLink(r) {
   return `https://calendar.google.com/calendar/render?${params.toString()}`;
 }
 
-// ─── APPEL API DEPUIS LA PAGE (utilise les cookies de session) ────────────────
-async function pageGet(page, url) {
-  return page.evaluate(async ({ url, gaid }) => {
-    const token = localStorage.getItem("token");
-    try {
-      const r = await fetch(url, {
-        headers: {
-          "Authorization": `Bearer ${token}`,
-          "g-aid-cs": gaid,
-          "Accept": "application/json",
-        },
-        credentials: "include",
-      });
-      const text = await r.text();
-      try { return { status: r.status, body: JSON.parse(text) }; }
-      catch(e) { return { status: r.status, body: text.substring(0, 300) }; }
-    } catch(e) {
-      return { status: 0, error: e.message };
-    }
-  }, { url, gaid: G_AID_CS });
-}
-
-// ─── LOGIN ────────────────────────────────────────────────────────────────────
-async function login(page) {
-  console.log("🌐 Navigation vers le portail...");
-  await page.goto(`${PORTAL_URL}/login`, { waitUntil: "networkidle2", timeout: 30000 });
-  await page.waitForSelector("input[type='email'], input[name='email'], #email", { timeout: 10000 });
-  await page.evaluate((email, password) => {
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-    const fill = (sel, val) => {
-      const el = document.querySelector(sel);
-      if (!el) return;
-      setter.call(el, val);
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-    };
-    fill("input[type='email'], input[name='email'], #email", email);
-    fill("input[type='password'], input[name='password'], #password", password);
-  }, GUESTY_EMAIL, GUESTY_PASSWORD);
-  await new Promise(r => setTimeout(r, 500));
-  await page.evaluate(() => {
-    (document.querySelector('button[type="submit"]') || document.querySelector("button"))?.click();
-  });
-  await new Promise(r => setTimeout(r, 8000));
-  if (page.url().includes("login")) throw new Error("Login échoué");
-  console.log(`✅ Connecté : ${page.url()}`);
-
-  // Naviguer sur le calendrier pour initialiser le contexte complet
-  await page.goto(`${PORTAL_URL}/my-properties/${LISTING_ID}/calendar`, { waitUntil: "networkidle2", timeout: 20000 });
-  await new Promise(r => setTimeout(r, 3000));
-
-  const token = await page.evaluate(() => localStorage.getItem("token"));
-  if (!token || token.length < 20) throw new Error("JWT introuvable");
-  console.log(`🔑 Token OK (${token.length} chars)`);
-}
-
-// ─── RÉCUPÉRATION DES RÉSERVATIONS ───────────────────────────────────────────
-async function fetchReservations(page) {
-  const now = new Date();
-  const fromDate = now.toISOString().slice(0, 10);
-  const toDate = new Date(now.getFullYear(), now.getMonth() + MONTHS_AHEAD + 1, 0).toISOString().slice(0, 10);
-  console.log(`\n🔍 Recherche réservations ${fromDate} → ${toDate}`);
-
-  // 1. Essayer la liste directe
-  const listEndpoints = [
-    `${API_BASE}/owners/me/reservations?listingId=${LISTING_ID}&checkIn[gte]=${fromDate}&checkOut[lte]=${toDate}&limit=50`,
-    `${API_BASE}/v2/reservations?listingId=${LISTING_ID}&checkIn[gte]=${fromDate}&checkOut[lte]=${toDate}&limit=50`,
-  ];
-  for (const url of listEndpoints) {
-    const res = await pageGet(page, url);
-    const shortUrl = url.split("?")[0].replace(API_BASE, "");
-    console.log(`  📦 ${shortUrl} → HTTP ${res.status}`);
-    if (res.status === 200 && res.body && typeof res.body === "object") {
-      const list = res.body.results || res.body.data || res.body.reservations || (Array.isArray(res.body) ? res.body : null);
-      if (list !== null) {
-        console.log(`  ✅ Liste directe OK : ${list.length} réservation(s)`);
-        return { list, fromDate, toDate };
-      }
-      console.log(`  ⚠️  Réponse inattendue : ${JSON.stringify(res.body).substring(0, 150)}`);
-    }
-  }
-
-  // 2. Fallback calendrier
-  console.log("  ⚠️  Liste directe indisponible — fallback via calendrier");
-  const calUrl = `${API_BASE}/v2/listings/${LISTING_ID}/calendar?from=${fromDate}&to=${toDate}`;
-  const calRes = await pageGet(page, calUrl);
-  console.log(`  📦 Calendar → HTTP ${calRes.status} : ${JSON.stringify(calRes.body).substring(0, 200)}`);
-  if (calRes.status !== 200 || !calRes.body) return { list: null, days: [], fromDate, toDate };
-  const days = Array.isArray(calRes.body) ? calRes.body : (calRes.body?.days || calRes.body?.data || []);
-  return { list: null, days, fromDate, toDate };
-}
-
-// ─── RÉCUPÉRATION DU REVENU PROPRIÉTAIRE ─────────────────────────────────────
-async function fetchOwnerRevenue(page, reservationIds) {
-  if (!reservationIds.length) return {};
-  const ids = reservationIds.join(",");
-  const url = `${API_BASE}/revenue-analytics/analytics/owner/${OWNER_ID}?reservationIds=${ids}`;
-  const res = await pageGet(page, url);
-  if (res.status !== 200 || !res.body || typeof res.body !== "object") return {};
-  const items = res.body.data || res.body.results || res.body.analytics || (Array.isArray(res.body) ? res.body : []);
-  const map = {};
-  for (const item of items) {
-    const id = item.reservationId || item._id || item.id;
-    if (id) map[id] = item.ownerRevenue ?? item.owner_revenue ?? item.revenue ?? null;
-  }
-  return map;
-}
-
 // ─── SCRAPING PRINCIPAL ───────────────────────────────────────────────────────
+// Stratégie : intercepter les réponses réseau pendant la navigation normale
+// app.guesty.com accepte les requêtes depuis le browser Puppeteer car il envoie
+// les headers Authorization automatiquement via les XHR de l'app.
 async function scrapeGuesty() {
   const browser = await puppeteer.launch({
     executablePath: "/usr/bin/google-chrome-stable",
@@ -165,58 +58,136 @@ async function scrapeGuesty() {
 
   try {
     const page = await browser.newPage();
-    await login(page);
 
-    const { list, days, fromDate, toDate } = await fetchReservations(page);
+    // Intercepter toutes les réponses réseau
+    const captured = {};
+    page.on("response", async response => {
+      const url = response.url();
+      if (!url.includes("app.guesty.com/api")) return;
+      try {
+        const body = await response.json();
+        if (url.includes("/calendar")) {
+          console.log(`  📥 Capturé: calendar (${JSON.stringify(body).length} chars)`);
+          captured.calendar = body;
+        } else if (url.includes("/owners/me/reservations") || url.includes("/v2/reservations")) {
+          console.log(`  📥 Capturé: reservations (${JSON.stringify(body).length} chars)`);
+          captured.reservations = body;
+        } else if (url.includes("revenue-analytics")) {
+          console.log(`  📥 Capturé: revenue-analytics`);
+          captured.revenue = body;
+        }
+      } catch(e) { /* pas JSON */ }
+    });
+
+    // Login
+    console.log("🌐 Navigation vers le portail...");
+    await page.goto(`${PORTAL_URL}/login`, { waitUntil: "networkidle2", timeout: 30000 });
+    await page.waitForSelector("input[type='email'], input[name='email'], #email", { timeout: 10000 });
+    await page.evaluate((email, password) => {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      const fill = (sel, val) => {
+        const el = document.querySelector(sel);
+        if (!el) return;
+        setter.call(el, val);
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      };
+      fill("input[type='email'], input[name='email'], #email", email);
+      fill("input[type='password'], input[name='password'], #password", password);
+    }, GUESTY_EMAIL, GUESTY_PASSWORD);
+    await new Promise(r => setTimeout(r, 500));
+    await page.evaluate(() => {
+      (document.querySelector('button[type="submit"]') || document.querySelector("button"))?.click();
+    });
+    await new Promise(r => setTimeout(r, 6000));
+    if (page.url().includes("login")) throw new Error("Login échoué");
+    console.log(`✅ Connecté : ${page.url()}`);
+
+    // Naviguer vers le calendrier — déclenche les appels API
+    const now = new Date();
+    const fromDate = now.toISOString().slice(0, 10);
+    const toDate = new Date(now.getFullYear(), now.getMonth() + MONTHS_AHEAD + 1, 0).toISOString().slice(0, 10);
+
+    console.log(`\n🔍 Chargement calendrier ${fromDate} → ${toDate}`);
+    await page.goto(`${PORTAL_URL}/my-properties/${LISTING_ID}/calendar`, { waitUntil: "networkidle2", timeout: 20000 });
+    await new Promise(r => setTimeout(r, 3000));
+
+    // Naviguer plusieurs mois pour capturer toutes les réservations
+    for (let i = 0; i < MONTHS_AHEAD; i++) {
+      // Cliquer le bouton "mois suivant"
+      await page.evaluate(() => {
+        const btns = Array.from(document.querySelectorAll("button"));
+        // Le bouton suivant est le dernier bouton de navigation (chevron >)
+        const nextBtn = btns.find(b => b.querySelector('svg') && !b.textContent.includes("juin") && !b.textContent.includes("2026"));
+        // Chercher par position : bouton à droite du sélecteur de mois
+        const navBtns = btns.filter(b => b.className.includes("gst-inline-flex"));
+        if (navBtns.length >= 2) navBtns[navBtns.length - 1].click();
+      });
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    console.log(`\n📦 Données capturées : ${Object.keys(captured).join(", ") || "aucune"}`);
+
+    // Parser les réservations
     const allReservations = [];
     const seenIds = new Set();
 
-    if (list !== null) {
-      const ids = list.map(r => r._id || r.id).filter(Boolean);
-      const revenueMap = await fetchOwnerRevenue(page, ids);
+    // Depuis la liste directe si capturée
+    if (captured.reservations) {
+      const list = captured.reservations.results || captured.reservations.data || captured.reservations.reservations || (Array.isArray(captured.reservations) ? captured.reservations : []);
+      console.log(`  📋 Liste réservations : ${list.length} entrée(s)`);
       for (const r of list) {
         const id = r._id || r.id;
         if (!id || seenIds.has(id)) continue;
         seenIds.add(id);
         const checkIn  = (r.checkInDateLocalized  || r.checkIn  || r.checkInDate  || "").slice(0, 10);
         const checkOut = (r.checkOutDateLocalized || r.checkOut || r.checkOutDate || "").slice(0, 10);
-        const res = {
+        allReservations.push({
           id, checkIn, checkOut,
           nights: r.nightsCount || r.nights || null,
-          guestName: r.guestName || (r.guest ? `${r.guest.firstName||""} ${r.guest.lastName||""}`.trim() : null),
+          guestName: r.guestName || (r.guest ? `${r.guest.firstName||""} ${r.guest.lastName||""}`.trim() : null) || null,
           source: r.source || r.channel || null,
           status: r.status || null,
-          ownerRevenue: revenueMap[id] ?? r.ownerRevenue ?? r.money?.ownerRevenue ?? null,
-        };
-        allReservations.push(res);
-        console.log(`  🏨 ${res.checkIn} → ${res.checkOut} | ${res.nights}n | ${res.ownerRevenue != null ? res.ownerRevenue + "€" : "?€"} | ${res.guestName || "?"} | ${res.source || "?"}`);
+          ownerRevenue: r.ownerRevenue ?? r.money?.ownerRevenue ?? null,
+        });
       }
-    } else if (days && days.length > 0) {
-      const reservationIds = [...new Set(days.filter(d => d.reservationId || d.reservation?._id).map(d => d.reservationId || d.reservation?._id))];
-      console.log(`  📊 ${reservationIds.length} réservation(s) via calendrier`);
-      const revenueMap = await fetchOwnerRevenue(page, reservationIds);
-      for (const resId of reservationIds) {
+    }
+
+    // Depuis le calendrier si capturé (et rien dans la liste)
+    if (allReservations.length === 0 && captured.calendar) {
+      const days = Array.isArray(captured.calendar) ? captured.calendar : (captured.calendar.days || captured.calendar.data || []);
+      const resIds = [...new Set(days.filter(d => d.reservationId).map(d => d.reservationId))];
+      console.log(`  📅 Calendrier : ${days.length} jours, ${resIds.length} réservation(s)`);
+      for (const resId of resIds) {
         if (seenIds.has(resId)) continue;
         seenIds.add(resId);
-        const resDays = days.filter(d => (d.reservationId || d.reservation?._id) === resId);
-        const dates = resDays.map(d => d.date).sort();
-        const res = {
+        const resDays = days.filter(d => d.reservationId === resId).map(d => d.date).sort();
+        allReservations.push({
           id: resId,
-          checkIn: dates[0] || null,
-          checkOut: dates[dates.length - 1] || null,
-          nights: dates.length,
+          checkIn: resDays[0] || null,
+          checkOut: resDays[resDays.length - 1] || null,
+          nights: resDays.length,
           guestName: null,
-          source: resDays[0]?.source || null,
-          status: resDays[0]?.status || "confirmed",
-          ownerRevenue: revenueMap[resId] ?? null,
-        };
-        allReservations.push(res);
-        console.log(`  🏨 ${res.checkIn} → ${res.checkOut} | ${res.nights}n | ${res.ownerRevenue != null ? res.ownerRevenue + "€" : "?€"}`);
+          source: null,
+          status: "confirmed",
+          ownerRevenue: null,
+        });
+      }
+    }
+
+    // Enrichir avec les revenus si capturés
+    if (captured.revenue) {
+      const items = captured.revenue.data || captured.revenue.results || (Array.isArray(captured.revenue) ? captured.revenue : []);
+      for (const item of items) {
+        const id = item.reservationId || item._id;
+        const res = allReservations.find(r => r.id === id);
+        if (res) res.ownerRevenue = item.ownerRevenue ?? item.owner_revenue ?? item.revenue ?? res.ownerRevenue;
       }
     }
 
     allReservations.sort((a, b) => (a.checkIn || "").localeCompare(b.checkIn || ""));
     console.log(`\n📊 Total : ${allReservations.length} réservation(s)`);
+    allReservations.forEach(r => console.log(`  🏨 ${r.checkIn} → ${r.checkOut} | ${r.nights}n | ${r.ownerRevenue != null ? r.ownerRevenue + "€" : "?€"} | ${r.guestName || "?"} | ${r.source || "?"}`));
     return allReservations;
 
   } finally {
