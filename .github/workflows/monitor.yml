@@ -1,8 +1,8 @@
-name: Passpass Monitor
+name: Guesty Monitor
 
 on:
   schedule:
- 
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -18,10 +18,10 @@ jobs:
         with:
           node-version: '18'
 
-      - name: Install Chrome and Xvfb
+      - name: Install Chrome
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb google-chrome-stable
+          sudo apt-get install -y google-chrome-stable
 
       - name: Cache node_modules
         uses: actions/cache@v4
@@ -38,26 +38,22 @@ jobs:
         uses: actions/cache@v4
         with:
           path: state.json
-          key: passpass-state-${{ github.run_id }}
+          key: guesty-state-${{ github.run_id }}
           restore-keys: |
-            passpass-state-
+            guesty-state-
 
       - name: Run monitor
         env:
-          PASSPASS_EMAIL: ${{ secrets.PASSPASS_EMAIL }}
-          PASSPASS_PASSWORD: ${{ secrets.PASSPASS_PASSWORD }}
+          GUESTY_EMAIL: ${{ secrets.GUESTY_EMAIL }}
+          GUESTY_PASSWORD: ${{ secrets.GUESTY_PASSWORD }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          DISPLAY: ':99'
-        run: |
-          Xvfb :99 -screen 0 1280x800x24 &
-          sleep 2
-          node index.js
+        run: node index.js
 
       - name: Save state
         if: always()
         uses: actions/cache@v4
         with:
           path: state.json
-          key: passpass-state-${{ github.run_id }}
+          key: guesty-state-${{ github.run_id }}
