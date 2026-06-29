@@ -75,9 +75,12 @@ async function scrapeGuesty() {
         } else if (url.includes("/owners/me/reservations") || url.includes("/v2/reservations")) {
           captured.reservations = body;
         } else if (url.includes("revenue-analytics") && Array.isArray(body) && body[0]?.reservationId) {
-          // Capturer les données revenue avec reservationId
           if (!captured.revenueItems) captured.revenueItems = [];
           captured.revenueItems.push(...body);
+        } else if (url.includes("/reservations/") && !url.includes("revenue") && !url.includes("calendar")) {
+          // Détail d'une réservation individuelle
+          if (!captured.resDetails) captured.resDetails = [];
+          if (body && body._id) captured.resDetails.push(body);
         }
       } catch(e) { /* pas JSON */ }
     });
@@ -129,6 +132,27 @@ async function scrapeGuesty() {
       await new Promise(r => setTimeout(r, 2000));
     }
 
+    // Appeler le détail pour chaque reservationId capturé via revenue-analytics
+    const capturedIds = [...new Set((captured.revenueItems || []).map(r => r.reservationId).filter(Boolean))];
+    console.log(`\n🔍 Chargement détails pour ${capturedIds.length} réservation(s)...`);
+    for (const resId of capturedIds) {
+      await page.evaluate(async (resId, apiBase) => {
+        const token = localStorage.getItem("token");
+        // Essayer plusieurs endpoints
+        for (const ep of [`${apiBase}/owners/reservations/${resId}`, `${apiBase}/v2/reservations/${resId}`]) {
+          try {
+            const r = await fetch(ep, {
+              headers: { "Authorization": `Bearer ${token}`, "Accept": "application/json" },
+              credentials: "include"
+            });
+            if (r.ok) { await r.json(); break; } // La réponse sera capturée par page.on("response")
+          } catch(e) {}
+        }
+      }, resId, API_BASE);
+      await new Promise(r => setTimeout(r, 300));
+    }
+    await new Promise(r => setTimeout(r, 1000));
+
     console.log(`\n📦 Données capturées : ${Object.keys(captured).join(", ") || "aucune"}`);
 
     // Parser les réservations
@@ -170,12 +194,33 @@ async function scrapeGuesty() {
 
     console.log(`  🏨 ${stays.length} séjour(s) détecté(s)`);
 
-    // Associer les revenus aux séjours par ordre chronologique
-    const revenueIds = Object.keys(revenueMap).sort();
-    for (let i = 0; i < stays.length; i++) {
-      const stay = stays[i];
-      const id = revenueIds[i] || `stay-${stay.checkIn}`;
+    // Construire un index des détails de réservation par date de checkIn
+    const detailsByCheckIn = {};
+    for (const d of (captured.resDetails || [])) {
+      const ci = (d.checkInDateLocalized || d.checkIn || d.checkInDate || "").slice(0,10);
+      if (ci) detailsByCheckIn[ci] = d;
+    }
+
+    // Associer revenus aux séjours par correspondance de dates
+    // revenueItems sont triés par date implicitement — on les mappe par ordre sur les séjours
+    const revenueItemsSorted = (captured.revenueItems || []).sort((a,b) => (a.reservationId||"").localeCompare(b.reservationId||""));
+    const staysSorted = [...stays].sort((a,b) => a.checkIn.localeCompare(b.checkIn));
+
+    for (let i = 0; i < staysSorted.length; i++) {
+      const stay = staysSorted[i];
+      // Chercher le revenue item dont la checkIn correspond (si on a les détails)
+      let matchedItem = null;
+      if (captured.resDetails && captured.resDetails.length > 0) {
+        const det = detailsByCheckIn[stay.checkIn];
+        if (det) matchedItem = revenueItemsSorted.find(r => r.reservationId === (det._id||det.id));
+      }
+      // Fallback : association par index
+      if (!matchedItem) matchedItem = revenueItemsSorted[i];
+
+      const id = matchedItem?.reservationId || `stay-${stay.checkIn}`;
       const nights = Math.round((new Date(stay.checkOut+"T00:00:00") - new Date(stay.checkIn+"T00:00:00")) / 86400000) + 1;
+      const det = detailsByCheckIn[stay.checkIn];
+
       if (!seenIds.has(stay.checkIn)) {
         seenIds.add(stay.checkIn);
         allReservations.push({
@@ -183,10 +228,10 @@ async function scrapeGuesty() {
           checkIn: stay.checkIn,
           checkOut: stay.checkOut,
           nights,
-          guestName: null,
-          source: null,
-          status: "confirmed",
-          ownerRevenue: revenueMap[id] ?? null,
+          guestName: det ? (det.guestName || (det.guest ? `${det.guest.firstName||""} ${det.guest.lastName||""}`.trim() : null)) : null,
+          source: det ? (det.source || det.channel || null) : null,
+          status: det ? (det.status || "confirmed") : "confirmed",
+          ownerRevenue: matchedItem ? (matchedItem.accountBased?.revenue ?? null) : null,
         });
       }
     }
