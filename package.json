@@ -1,6 +1,7 @@
 {
   "name": "guesty-monitor",
-  "version": "2.0.0",
+  "version": "3.0.0",
+  "description": "Bot de surveillance des réservations Le jardin d'Henri sur Guesty",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
