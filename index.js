@@ -237,74 +237,41 @@ async function scrapeGuesty() {
     }
     console.log(`  💰 ${Object.keys(revenueMap).length} revenu(s) capturé(s)`);
 
-    // Construire les réservations depuis les jours du calendrier (status=booked, blocks.b=true)
+    // Extraire les réservations depuis blockRefs des jours du calendrier
     const allDays = captured.calendarDays || [];
     console.log(`  📅 ${allDays.length} jours de calendrier capturés`);
 
-    // Regrouper les jours consécutifs "booked" en séjours
-    const bookedDays = allDays.filter(d => d.status === "booked" || d.blocks?.b === true).map(d => d.date).sort();
-    console.log(`  🟢 ${bookedDays.length} jours réservés`);
+    // Collecter toutes les réservations uniques depuis blockRefs
+    for (const day of allDays) {
+      if (!day.blockRefs) continue;
+      for (const block of day.blockRefs) {
+        if (block.type !== "b" || !block.reservationId) continue;
+        const res = block.reservation;
+        if (!res) continue;
+        const id = block.reservationId;
+        if (seenIds.has(id)) continue;
+        seenIds.add(id);
 
-    // Trouver les séjours : séquences de jours consécutifs
-    const stays = [];
-    let stayStart = null, prevDate = null;
-    for (const date of bookedDays) {
-      if (!prevDate) { stayStart = date; prevDate = date; continue; }
-      const prev = new Date(prevDate + "T00:00:00");
-      const curr = new Date(date + "T00:00:00");
-      const diff = (curr - prev) / 86400000;
-      if (diff > 1) {
-        // Fin du séjour précédent
-        stays.push({ checkIn: stayStart, checkOut: prevDate });
-        stayStart = date;
-      }
-      prevDate = date;
-    }
-    if (stayStart) stays.push({ checkIn: stayStart, checkOut: prevDate });
+        const checkIn  = (res.checkInDateLocalized  || res.checkIn  || "").slice(0, 10);
+        const checkOut = (res.checkOutDateLocalized || res.checkOut || "").slice(0, 10);
+        const nights = checkIn && checkOut
+          ? Math.round((new Date(checkOut+"T00:00:00") - new Date(checkIn+"T00:00:00")) / 86400000)
+          : null;
 
-    console.log(`  🏨 ${stays.length} séjour(s) détecté(s)`);
+        // Revenu depuis revenue-analytics ou depuis money de la réservation
+        const ownerRevenue = revenueMap[id]
+          ?? res.money?.ownerRevenue
+          ?? res.money?.netAmount
+          ?? null;
 
-    // Construire un index des détails de réservation par date de checkIn
-    const detailsByCheckIn = {};
-    for (const d of (captured.resDetails || [])) {
-      const ci = (d.checkInDateLocalized || d.checkIn || d.checkInDate || "").slice(0,10);
-      if (ci) detailsByCheckIn[ci] = d;
-    }
+        // Source lisible
+        const sourceMap = { airbnb2: "Airbnb", airbnb: "Airbnb", "booking.com": "Booking.com", direct: "Direct" };
+        const source = sourceMap[res.source] || res.source || null;
 
-    // Associer revenus aux séjours par correspondance de dates
-    // revenueItems sont triés par date implicitement — on les mappe par ordre sur les séjours
-    const revenueItemsSorted = (captured.revenueItems || []).sort((a,b) => (a.reservationId||"").localeCompare(b.reservationId||""));
-    const staysSorted = [...stays].sort((a,b) => a.checkIn.localeCompare(b.checkIn));
-
-    for (let i = 0; i < staysSorted.length; i++) {
-      const stay = staysSorted[i];
-      // Chercher le revenue item dont la checkIn correspond (si on a les détails)
-      let matchedItem = null;
-      if (captured.resDetails && captured.resDetails.length > 0) {
-        const det = detailsByCheckIn[stay.checkIn];
-        if (det) matchedItem = revenueItemsSorted.find(r => r.reservationId === (det._id||det.id));
-      }
-      // Fallback : association par index
-      if (!matchedItem) matchedItem = revenueItemsSorted[i];
-
-      const id = matchedItem?.reservationId || `stay-${stay.checkIn}`;
-      const nights = Math.round((new Date(stay.checkOut+"T00:00:00") - new Date(stay.checkIn+"T00:00:00")) / 86400000) + 1;
-      const det = detailsByCheckIn[stay.checkIn];
-
-      if (!seenIds.has(stay.checkIn)) {
-        seenIds.add(stay.checkIn);
-        allReservations.push({
-          id,
-          checkIn: stay.checkIn,
-          checkOut: stay.checkOut,
-          nights,
-          guestName: det ? (det.guestName || (det.guest ? `${det.guest.firstName||""} ${det.guest.lastName||""}`.trim() : null)) : null,
-          source: det ? (det.source || det.channel || null) : null,
-          status: det ? (det.status || "confirmed") : "confirmed",
-          ownerRevenue: matchedItem ? (matchedItem.accountBased?.revenue ?? null) : null,
-        });
+        allReservations.push({ id, checkIn, checkOut, nights, guestName: null, source, status: res.status || "confirmed", ownerRevenue });
       }
     }
+    console.log(`  🏨 ${allReservations.length} réservation(s) depuis blockRefs`);
 
     allReservations.sort((a, b) => (a.checkIn || "").localeCompare(b.checkIn || ""));
     console.log(`\n📊 Total : ${allReservations.length} réservation(s)`);
