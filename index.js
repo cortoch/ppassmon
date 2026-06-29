@@ -122,35 +122,39 @@ async function scrapeGuesty() {
     await page.goto(`${PORTAL_URL}/my-properties/${LISTING_ID}/calendar`, { waitUntil: "networkidle2", timeout: 20000 });
     await new Promise(r => setTimeout(r, 3000));
 
-    // Naviguer plusieurs mois pour capturer toutes les réservations
+    // Naviguer plusieurs mois et cliquer sur les jours réservés à chaque mois
+    console.log(`\n🔍 Navigation + clics sur jours réservés...`);
+
+    // Cliquer sur les booked du mois courant d'abord
+    const clickBookedCells = async () => {
+      const cells = await page.evaluate(() => {
+        const els = Array.from(document.querySelectorAll('.DayPicker-Day--wrap.booked'));
+        return els.map(el => {
+          const r = el.getBoundingClientRect();
+          return { x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2) };
+        }).filter(c => c.x > 0 && c.y > 0);
+      });
+      if (cells.length > 0) {
+        console.log(`  🖱️  ${cells.length} cellule(s) réservée(s)`);
+        for (const c of cells) {
+          await page.mouse.click(c.x, c.y);
+          await new Promise(r => setTimeout(r, 600));
+        }
+        await new Promise(r => setTimeout(r, 500));
+      }
+    };
+
+    await clickBookedCells(); // mois courant
+
     for (let i = 0; i < MONTHS_AHEAD; i++) {
-      // Cliquer le bouton "mois suivant"
+      // Naviguer au mois suivant
       await page.evaluate(() => {
-        const btns = Array.from(document.querySelectorAll("button"));
-        // Le bouton suivant est le dernier bouton de navigation (chevron >)
-        const nextBtn = btns.find(b => b.querySelector('svg') && !b.textContent.includes("juin") && !b.textContent.includes("2026"));
-        // Chercher par position : bouton à droite du sélecteur de mois
-        const navBtns = btns.filter(b => b.className.includes("gst-inline-flex"));
+        const navBtns = Array.from(document.querySelectorAll("button")).filter(b => b.className.includes("gst-inline-flex"));
         if (navBtns.length >= 2) navBtns[navBtns.length - 1].click();
       });
       await new Promise(r => setTimeout(r, 2000));
+      await clickBookedCells();
     }
-
-    // Cliquer sur les jours réservés pour déclencher les appels API de détail
-    console.log(`\n🔍 Clic sur les jours réservés pour capturer les détails...`);
-    const bookedCells = await page.evaluate(() => {
-      const cells = Array.from(document.querySelectorAll('.DayPicker-Day--wrap.booked'));
-      return cells.map(el => {
-        const r = el.getBoundingClientRect();
-        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
-      }).filter(c => c.x > 0 && c.y > 0).slice(0, 20); // max 20 clics
-    });
-    console.log(`  🖱️  ${bookedCells.length} cellule(s) réservée(s) trouvée(s)`);
-    for (const cell of bookedCells) {
-      await page.mouse.click(cell.x, cell.y);
-      await new Promise(r => setTimeout(r, 800));
-    }
-    await new Promise(r => setTimeout(r, 1000));
 
     console.log(`\n📦 Données capturées : ${Object.keys(captured).join(", ") || "aucune"}`);
 
