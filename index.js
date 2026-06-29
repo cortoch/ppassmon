@@ -85,6 +85,10 @@ async function scrapeGuesty() {
           captured.resDetails.push(body);
           const ci = (body.checkInDateLocalized || body.checkIn || body.checkInDate || "").slice(0,10);
           console.log(`  📋 Détail capturé: ${body._id||body.id} checkIn=${ci} guest=${body.guestName||"?"} source=${body.source||"?"}`);
+        } else if (url.includes("app.guesty.com") && !url.includes("revenue") && !url.includes("calendar") && !url.includes("track") && !url.includes("brand")) {
+          // Logger les autres URLs capturées pour diagnostic
+          const rawPreview = JSON.stringify(body).substring(0, 150);
+          console.log(`  🔍 URL inconnue: ${url.split("?")[0].replace("https://app.guesty.com/api","").substring(0,60)} → ${rawPreview}`);
         }
       } catch(e) { /* pas JSON */ }
     });
