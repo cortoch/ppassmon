@@ -275,16 +275,30 @@ async function scrapeGuesty() {
           captured._loggedRes = true;
         }
 
-        // Fallback revenu : hostPayout si ownerRevenue manquant
-        const hostPayout = res.money?.hostPayout ?? null;
-        const finalRevenue = ownerRevenue ?? hostPayout;
+        // Montants financiers
+        const hostPayout    = res.money?.hostPayout ?? null;
+        const totalPaid     = res.money?.totalPaid ?? null;
+        const fareAcco      = res.money?.fareAccommodationAdjusted ?? null;
+        const finalRevenue  = ownerRevenue ?? hostPayout;
+
+        // TPR : Taux de Prélèvement Réel
+        const tpr = (hostPayout != null && finalRevenue != null && hostPayout > 0)
+          ? Math.round((hostPayout - finalRevenue) / hostPayout * 1000) / 10
+          : null;
+
+        // Nom voyageur (disponible dans res.guest.fullName)
+        const guestName = res.guest?.fullName || null;
 
         allReservations.push({
           id,
           checkIn, checkOut, nights,
-          guestName: null,
+          guestName,
           source, status: res.status || "confirmed",
           ownerRevenue: finalRevenue,
+          hostPayout,
+          totalPaid,
+          fareAcco,
+          tpr,
           guests: res.guests ?? res.guestsCount ?? null,
         });
       }
@@ -295,7 +309,8 @@ async function scrapeGuesty() {
     console.log(`\n📊 Total : ${allReservations.length} réservation(s)`);
     allReservations.forEach(r => {
       const prixNuit = r.ownerRevenue != null && r.nights ? (r.ownerRevenue / r.nights).toFixed(2) : "?";
-      console.log(`  🏨 ${r.checkIn} → ${r.checkOut} | ${r.nights}n | ${r.ownerRevenue != null ? r.ownerRevenue + "€" : "?€"} (${prixNuit}€/n) | ${r.guests??'?'} voy. | ${r.source || "?"}`);
+      const tprStr = r.tpr != null ? ` | TPR=${r.tpr}%` : "";
+      console.log(`  🏨 ${r.checkIn} → ${r.checkOut} | ${r.nights}n | host=${r.hostPayout??'?'}€ owner=${r.ownerRevenue??'?'}€${tprStr} | ${r.guests??'?'} voy. | ${r.guestName||'?'} | ${r.source || "?"}`);
     });
     return allReservations;
 
