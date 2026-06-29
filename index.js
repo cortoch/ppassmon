@@ -13,6 +13,7 @@ const EMAIL_PASSWORD  = process.env.EMAIL_PASSWORD  || "REMPLACE";
 const LISTING_ID   = "69e5e471e72c790015c810de";
 const OWNER_ID     = "69ef0aceb851941a87f7042d";
 const PORTAL_URL   = "https://mercijulie.guestyowners.com";
+const API_BASE     = "https://app.guesty.com/api";
 const CACHE_FILE   = "state.json";
 const MONTHS_AHEAD = 6;
 
