@@ -136,19 +136,18 @@ async function scrapeGuesty() {
     const capturedIds = [...new Set((captured.revenueItems || []).map(r => r.reservationId).filter(Boolean))];
     console.log(`\n🔍 Chargement détails pour ${capturedIds.length} réservation(s)...`);
     for (const resId of capturedIds) {
-      await page.evaluate(async (resId, apiBase) => {
+      await page.evaluate(async ({ resId, apiBase }) => {
         const token = localStorage.getItem("token");
-        // Essayer plusieurs endpoints
         for (const ep of [`${apiBase}/owners/reservations/${resId}`, `${apiBase}/v2/reservations/${resId}`]) {
           try {
             const r = await fetch(ep, {
               headers: { "Authorization": `Bearer ${token}`, "Accept": "application/json" },
               credentials: "include"
             });
-            if (r.ok) { await r.json(); break; } // La réponse sera capturée par page.on("response")
+            if (r.ok) { await r.json(); break; }
           } catch(e) {}
         }
-      }, resId, API_BASE);
+      }, { resId, apiBase: API_BASE });
       await new Promise(r => setTimeout(r, 300));
     }
     await new Promise(r => setTimeout(r, 1000));
