@@ -67,13 +67,16 @@ async function scrapeGuesty() {
       try {
         const body = await response.json();
         if (url.includes("/calendar")) {
-          console.log(`  📥 Capturé: calendar (${JSON.stringify(body).length} chars)`);
+          const s = JSON.stringify(body);
+          const keys = Array.isArray(body) ? `array[${body.length}]` : Object.keys(body).join(",");
+          console.log(`  📥 calendar ${s.length}c keys=${keys} sample=${s.substring(0,300)}`);
           captured.calendar = body;
         } else if (url.includes("/owners/me/reservations") || url.includes("/v2/reservations")) {
-          console.log(`  📥 Capturé: reservations (${JSON.stringify(body).length} chars)`);
+          console.log(`  📥 reservations: ${JSON.stringify(body)}`);
           captured.reservations = body;
         } else if (url.includes("revenue-analytics")) {
-          console.log(`  📥 Capturé: revenue-analytics`);
+          const rid = body?.data?.[0]?.reservationId || body?.results?.[0]?.reservationId || "?";
+          console.log(`  📥 revenue-analytics: ${JSON.stringify(body).substring(0,200)}`);
           captured.revenue = body;
         }
       } catch(e) { /* pas JSON */ }
