@@ -160,6 +160,62 @@ async function scrapeGuesty() {
       await clickBookedCells();
     }
 
+    // Lire les données de réservation depuis le state React (après les clics)
+    const reactData = await page.evaluate(() => {
+      try {
+        // Trouver la root React
+        const appEl = document.getElementById('app');
+        if (!appEl) return null;
+        const fiberKey = Object.keys(appEl).find(k => k.startsWith('__reactFiber'));
+        if (!fiberKey) return null;
+        
+        // Chercher les données de réservation dans l'arbre React
+        const results = [];
+        const seen = new Set();
+        
+        const walk = (node, depth) => {
+          if (!node || depth > 60) return;
+          const state = node.memoizedState;
+          if (state) {
+            // Chercher dans les hooks state
+            let s = state;
+            while (s) {
+              const val = s.memoizedState;
+              if (val && typeof val === 'object' && !Array.isArray(val) && val._id && val.checkIn) {
+                if (!seen.has(val._id)) {
+                  seen.add(val._id);
+                  results.push({
+                    id: val._id,
+                    checkIn: (val.checkInDateLocalized || val.checkIn || val.checkInDate || '').slice(0,10),
+                    checkOut: (val.checkOutDateLocalized || val.checkOut || val.checkOutDate || '').slice(0,10),
+                    guestName: val.guestName || null,
+                    source: val.source || val.channel || null,
+                    status: val.status || null,
+                  });
+                }
+              }
+              s = s.next;
+            }
+          }
+          walk(node.child, depth + 1);
+          walk(node.sibling, depth + 1);
+        };
+        
+        walk(appEl[fiberKey], 0);
+        return results;
+      } catch(e) {
+        return { error: e.message };
+      }
+    });
+    
+    if (reactData && Array.isArray(reactData) && reactData.length > 0) {
+      console.log(`  ⚛️  ${reactData.length} réservation(s) depuis React state`);
+      if (!captured.resDetails) captured.resDetails = [];
+      captured.resDetails.push(...reactData);
+    } else {
+      console.log(`  ⚛️  React state: ${JSON.stringify(reactData).substring(0,100)}`);
+    }
+
     console.log(`\n📦 Données capturées : ${Object.keys(captured).join(", ") || "aucune"}`);
 
     // Parser les réservations
