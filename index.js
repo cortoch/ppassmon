@@ -41,6 +41,7 @@ function buildGCalLink(r) {
     dates: `${fmt(r.checkIn)}/${fmt(r.checkOut)}`,
     details: `Du ${fmtDate(r.checkIn)} au ${fmtDate(r.checkOut)}\n${nuits} nuits\nVoyageur: ${r.guestName || "?"}\nRevenu propriétaire: ${r.ownerRevenue != null ? r.ownerRevenue + " €" : "?"}\nPlateforme: ${r.source || "?"}\nÉtat: ${r.status || "?"}`,
     location: "Le jardin d'Henri, 2 Rue des Aloès, Perpignan",
+    src: "41714fc51aa2972ba9ec716727401874ec3f5cb62939e868a4432680fd108b27@group.calendar.google.com",
   });
   return `https://calendar.google.com/calendar/render?${params.toString()}`;
 }
