@@ -142,6 +142,9 @@ async function fetchCalendar(token, from, to) {
     console.warn(`  ⚠️  Calendar HTTP ${res.status}`);
     return [];
   }
+  // Logger la réponse brute pour diagnostic
+  const raw = JSON.stringify(res.body);
+  console.log(`  📦 Calendar réponse (${raw.length} chars) : ${raw.substring(0, 300)}`);
   // La réponse est un tableau de jours : [{ date, status, reservationId, ... }, ...]
   const days = Array.isArray(res.body) ? res.body : (res.body?.days || res.body?.data || []);
   return days;
@@ -193,6 +196,8 @@ async function fetchReservationsList(token, from, to) {
   for (const ep of endpoints) {
     const res = await guestyGet(ep, token);
     if (res.status === 200 && res.body) {
+      const raw = JSON.stringify(res.body);
+      console.log(`  📦 ${ep.split("?")[0]} → HTTP ${res.status} (${raw.length} chars) : ${raw.substring(0, 200)}`);
       const list = res.body.results || res.body.data || res.body.reservations || (Array.isArray(res.body) ? res.body : null);
       if (list && list.length >= 0) {
         console.log(`  ✅ Liste réservations via ${ep.split("?")[0]} (${list.length})`);
