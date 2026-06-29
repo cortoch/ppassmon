@@ -78,10 +78,13 @@ async function scrapeGuesty() {
         } else if (url.includes("revenue-analytics") && Array.isArray(body) && body[0]?.reservationId) {
           if (!captured.revenueItems) captured.revenueItems = [];
           captured.revenueItems.push(...body);
-        } else if (url.includes("/reservations/") && !url.includes("revenue") && !url.includes("calendar")) {
-          // Détail d'une réservation individuelle
+        } else if ((url.includes("/reservations/") || url.includes("/owners/reservations/")) && 
+                   !url.includes("revenue") && !url.includes("calendar") &&
+                   body && (body._id || body.id || body.checkIn)) {
           if (!captured.resDetails) captured.resDetails = [];
-          if (body && body._id) captured.resDetails.push(body);
+          captured.resDetails.push(body);
+          const ci = (body.checkInDateLocalized || body.checkIn || body.checkInDate || "").slice(0,10);
+          console.log(`  📋 Détail capturé: ${body._id||body.id} checkIn=${ci} guest=${body.guestName||"?"} source=${body.source||"?"}`);
         }
       } catch(e) { /* pas JSON */ }
     });
@@ -133,23 +136,19 @@ async function scrapeGuesty() {
       await new Promise(r => setTimeout(r, 2000));
     }
 
-    // Appeler le détail pour chaque reservationId capturé via revenue-analytics
-    const capturedIds = [...new Set((captured.revenueItems || []).map(r => r.reservationId).filter(Boolean))];
-    console.log(`\n🔍 Chargement détails pour ${capturedIds.length} réservation(s)...`);
-    for (const resId of capturedIds) {
-      await page.evaluate(async ({ resId, apiBase }) => {
-        const token = localStorage.getItem("token");
-        for (const ep of [`${apiBase}/owners/reservations/${resId}`, `${apiBase}/v2/reservations/${resId}`]) {
-          try {
-            const r = await fetch(ep, {
-              headers: { "Authorization": `Bearer ${token}`, "Accept": "application/json" },
-              credentials: "include"
-            });
-            if (r.ok) { await r.json(); break; }
-          } catch(e) {}
-        }
-      }, { resId, apiBase: API_BASE });
-      await new Promise(r => setTimeout(r, 300));
+    // Cliquer sur les jours réservés pour déclencher les appels API de détail
+    console.log(`\n🔍 Clic sur les jours réservés pour capturer les détails...`);
+    const bookedCells = await page.evaluate(() => {
+      const cells = Array.from(document.querySelectorAll('.DayPicker-Day--wrap.booked'));
+      return cells.map(el => {
+        const r = el.getBoundingClientRect();
+        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+      }).filter(c => c.x > 0 && c.y > 0).slice(0, 20); // max 20 clics
+    });
+    console.log(`  🖱️  ${bookedCells.length} cellule(s) réservée(s) trouvée(s)`);
+    for (const cell of bookedCells) {
+      await page.mouse.click(cell.x, cell.y);
+      await new Promise(r => setTimeout(r, 800));
     }
     await new Promise(r => setTimeout(r, 1000));
 
