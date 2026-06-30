@@ -35,9 +35,11 @@ function buildGCalLink(r) {
   if (!r.checkIn || !r.checkOut) return null;
   const fmt = d => d.replace(/-/g, "");
   const nuits = r.nights || "?";
+  const prixStr = r.ownerRevenue != null ? `${r.ownerRevenue}€` : "?€";
+  const nomStr = r.guestName || r.source || "?";
   const params = new URLSearchParams({
     action: "TEMPLATE",
-    text: `🏠 Réservation Le jardin d'Henri (${nuits} nuit${nuits > 1 ? "s" : ""})`,
+    text: `🏠 ${nomStr} — ${prixStr} (${nuits}n)`,
     dates: `${fmt(r.checkIn)}/${fmt(r.checkOut)}`,
     details: `Du ${fmtDate(r.checkIn)} au ${fmtDate(r.checkOut)}\n${nuits} nuits\nVoyageur: ${r.guestName || "?"}\nRevenu propriétaire: ${r.ownerRevenue != null ? r.ownerRevenue + " €" : "?"}\nPlateforme: ${r.source || "?"}\nÉtat: ${r.status || "?"}`,
     location: "Le jardin d'Henri, 2 Rue des Aloès, Perpignan",
