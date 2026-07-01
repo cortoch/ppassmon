@@ -57,3 +57,14 @@ jobs:
         with:
           path: state.json
           key: guesty-state-${{ github.run_id }}
+
+      - name: Commit debug info
+        if: always()
+        run: |
+          git config user.name "guesty-monitor-bot"
+          git config user.email "bot@ppassmon.local"
+          if [ -f debug-status.json ]; then
+            git add debug-status.json
+            git diff --cached --quiet || git commit -m "debug: update status distribution [skip ci]"
+            git push || true
+          fi
