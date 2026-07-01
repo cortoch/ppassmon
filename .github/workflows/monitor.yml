@@ -1,5 +1,8 @@
 name: Guesty Monitor
 
+permissions:
+  contents: write
+
 on:
   schedule:
     - cron: '0 * * * *'
