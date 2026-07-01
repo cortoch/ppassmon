@@ -108,6 +108,8 @@ async function scrapeGuesty() {
           // Logger les autres URLs capturées pour diagnostic
           const rawPreview = JSON.stringify(body).substring(0, 150);
           console.log(`  🔍 URL inconnue: ${url.split("?")[0].replace("https://app.guesty.com/api","").substring(0,60)} → ${rawPreview}`);
+          if (!captured._otherUrls) captured._otherUrls = [];
+          if (captured._otherUrls.length < 20) captured._otherUrls.push(url.split("?")[0]);
         }
       } catch(e) { /* pas JSON */ }
     });
@@ -322,14 +324,29 @@ async function scrapeGuesty() {
     const cancellationInfo = {};
     const reservationsList = captured.reservationsList || [];
     console.log(`  📋 ${reservationsList.length} entrée(s) dans reservations-list`);
+    const statusCounts = {};
     if (reservationsList.length > 0) {
-      const statusCounts = {};
       for (const it of reservationsList) {
         const st = it.status || "?";
         statusCounts[st] = (statusCounts[st] || 0) + 1;
       }
       console.log(`  📊 Distribution status (reservations-list): ${JSON.stringify(statusCounts)}`);
     }
+    // Debug persistant : écrit dans un fichier committé, lisible sans passer par les logs GitHub Actions
+    try {
+      fs.writeFileSync("debug-status.json", JSON.stringify({
+        generatedAt: new Date().toISOString(),
+        blockRefsStatusCounts: (() => {
+          const c = {};
+          for (const r of allReservations) c[r.status || "?"] = (c[r.status || "?"] || 0) + 1;
+          return c;
+        })(),
+        reservationsListCount: reservationsList.length,
+        reservationsListStatusCounts: statusCounts,
+        reservationsListSample: reservationsList[0] || null,
+        otherUrlsSeen: captured._otherUrls || [],
+      }, null, 2));
+    } catch (e) { console.log("  ⚠️ Erreur écriture debug-status.json:", e.message); }
     for (const it of reservationsList) {
       const id = it._id || it.id || it.reservationId;
       if (!id) continue;
