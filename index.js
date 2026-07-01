@@ -282,9 +282,10 @@ async function scrapeGuesty() {
         const sourceMap = { airbnb2: "Airbnb", airbnb: "Airbnb", "booking.com": "Booking.com", direct: "Direct" };
         const source = sourceMap[res.source] || res.source || null;
 
-        // Logger le contenu de res une fois pour voir les champs disponibles
+        // Logger le JSON COMPLET de la première réservation pour analyse
         if (!captured._loggedRes) {
-          console.log(`  🔬 res sample: ${JSON.stringify(res).substring(0, 500)}`);
+          console.log(`  🔬 res FULL: ${JSON.stringify(res)}`);
+          console.log(`  🔬 block FULL: ${JSON.stringify(block)}`);
           captured._loggedRes = true;
         }
 
