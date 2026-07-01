@@ -94,6 +94,18 @@ async function scrapeGuesty() {
             }
           }
           captured.calendar = body;
+          // Indexer les prix par date pour accès rapide
+          if (!captured.priceByDate) captured.priceByDate = {};
+          for (const day of days) {
+            if (day.date && day.price != null) {
+              captured.priceByDate[day.date] = {
+                price: day.price,
+                basePrice: day.basePrice,
+                minNights: day.minNights,
+                status: day.status, // 'available', 'booked', 'unavailable'
+              };
+            }
+          }
         } else if (url.includes("/owners/me/reservations") || url.includes("/v2/reservations")) {
           captured.reservations = body;
           const list = Array.isArray(body) ? body : (body.results || body.data || body.reservations || []);
@@ -309,6 +321,12 @@ async function scrapeGuesty() {
         // Nom voyageur (disponible dans res.guest.fullName)
         const guestName = res.guest?.fullName || null;
 
+        // Prix PriceLabs du jour de check-in (depuis calendarDays)
+        const priceDayData = (captured.calendarDays || []).find(d => d.date === checkIn);
+        const priceLabsCheckIn = priceDayData?.price ?? null;
+        const basePriceCheckIn = priceDayData?.basePrice ?? null;
+        const minNightsCheckIn = priceDayData?.minNights ?? null;
+
         // Frais plateforme estimés (~12% Airbnb, ~18% Booking selon données observées)
         // hostPayout = fareAcco + frais_plateforme
         // fareAcco = nuitées nettes (sans frais)
@@ -335,6 +353,9 @@ async function scrapeGuesty() {
           guests: res.guestsCount ?? null,
           adultes, enfants, bebes,
           confirmationCode: res.confirmationCode || null,
+          priceLabsCheckIn,   // prix PriceLabs affiché le jour du check-in
+          basePriceCheckIn,   // prix de base (hors dynamique)
+          minNightsCheckIn,   // séjour minimum configuré
         });
       }
     }
@@ -382,6 +403,16 @@ async function scrapeGuesty() {
         cancelledAt: it.cancelledAt || it.canceledAt || it.cancellation?.date || null,
       };
     }
+
+    // Stocker les données PriceLabs pour analyse RevPAR
+    const priceByDate = captured.priceByDate || {};
+    const nbJoursDispos = Object.values(priceByDate).filter(d => d.status === 'available').length;
+    const nbJoursReserves = Object.values(priceByDate).filter(d => d.status === 'booked').length;
+    const nbJoursTotaux = Object.keys(priceByDate).length;
+    const revParPossible = Object.values(priceByDate)
+      .filter(d => d.status === 'available' || d.status === 'booked')
+      .reduce((sum, d) => sum + (d.price || 0), 0);
+    console.log(`  📈 PriceLabs: ${nbJoursReserves}j réservés / ${nbJoursTotaux}j totaux | RevPAR possible (6m): ${revParPossible.toFixed(0)}€`);
 
     allReservations.sort((a, b) => (a.checkIn || "").localeCompare(b.checkIn || ""));
     console.log(`\n📊 Total : ${allReservations.length} réservation(s)`);
