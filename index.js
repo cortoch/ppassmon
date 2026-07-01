@@ -41,7 +41,18 @@ function buildGCalLink(r) {
     action: "TEMPLATE",
     text: `🏠 ${nomStr} — ${prixStr} (${nuits}n)`,
     dates: `${fmt(r.checkIn)}/${fmt(r.checkOut)}`,
-    details: `Du ${fmtDate(r.checkIn)} au ${fmtDate(r.checkOut)}\n${nuits} nuits\nVoyageur: ${r.guestName || "?"}\nRevenu propriétaire: ${r.ownerRevenue != null ? r.ownerRevenue + " €" : "?"}\nPlateforme: ${r.source || "?"}\nÉtat: ${r.status || "?"}`,
+    details: [
+      `Du ${fmtDate(r.checkIn)} au ${fmtDate(r.checkOut)}`,
+      `${nuits} nuits`,
+      `Voyageur: ${r.guestName || "?"}`,
+      r.adultes != null ? `Composition: ${r.adultes} adulte(s)${r.enfants ? ', ' + r.enfants + ' enfant(s)' : ''}${r.bebes ? ', ' + r.bebes + ' bébé(s)' : ''}` : null,
+      `Revenu net propriétaire: ${r.ownerRevenue != null ? r.ownerRevenue + " €" : "?"}`,
+      r.hostPayout != null ? `Brut plateforme: ${r.hostPayout} €` : null,
+      r.platformFee != null ? `Frais plateforme: ${r.platformFee} €` : null,
+      `Plateforme: ${r.source || "?"}`,
+      r.confirmationCode ? `Code: ${r.confirmationCode}` : null,
+      `État: ${r.status || "?"}`,
+    ].filter(Boolean).join('\n'),
     location: "Le jardin d'Henri, 2 Rue des Aloès, Perpignan",
     src: "41714fc51aa2972ba9ec716727401874ec3f5cb62939e868a4432680fd108b27@group.calendar.google.com",
   });
@@ -282,25 +293,7 @@ async function scrapeGuesty() {
         const sourceMap = { airbnb2: "Airbnb", airbnb: "Airbnb", "booking.com": "Booking.com", direct: "Direct" };
         const source = sourceMap[res.source] || res.source || null;
 
-        // Logger les champs utiles de la première réservation
-        if (!captured._loggedRes) {
-          console.log(`  🔬 keys: ${Object.keys(res).join(',')}`);
-          console.log(`  🔬 money: ${JSON.stringify(res.money)}`);
-          console.log(`  🔬 integration: ${JSON.stringify(res.integration)}`);
-          console.log(`  🔬 numberOfGuests: ${JSON.stringify(res.numberOfGuests)}`);
-          console.log(`  🔬 guestsCount: ${res.guestsCount}`);
-          console.log(`  🔬 expectedPayout: ${res.expectedPayoutAmount}`);
-          console.log(`  🔬 netIncome: ${res.netIncome}`);
-          console.log(`  🔬 ownerRevenue: ${res.ownerRevenue}`);
-          console.log(`  🔬 hostPayout: ${res.money?.hostPayout}`);
-          console.log(`  🔬 fareAcco: ${res.money?.fareAccommodationAdjusted}`);
-          console.log(`  🔬 cleaning: ${res.money?.cleaningFee ?? res.money?.cleaning ?? res.money?.fareCleaningFee ?? 'N/A'}`);
-          console.log(`  🔬 platformFee: ${res.money?.farePlatformFee ?? res.money?.platformFee ?? 'N/A'}`);
-          console.log(`  🔬 totalFees: ${JSON.stringify(res.money?.fees)}`);
-          console.log(`  🔬 block_money: ${JSON.stringify(block.reservation?.money)}`);
-          console.log(`  🔬 block_keys: ${Object.keys(block).join(',')}`);
-          captured._loggedRes = true;
-        }
+
 
         // Montants financiers
         const hostPayout    = res.money?.hostPayout ?? null;
@@ -316,6 +309,18 @@ async function scrapeGuesty() {
         // Nom voyageur (disponible dans res.guest.fullName)
         const guestName = res.guest?.fullName || null;
 
+        // Frais plateforme estimés (~12% Airbnb, ~18% Booking selon données observées)
+        // hostPayout = fareAcco + frais_plateforme
+        // fareAcco = nuitées nettes (sans frais)
+        const platformFeeRate = src === "Booking.com" ? 0.18 : 0.12; // ~18% Booking, ~12% Airbnb
+        const platformFee = fareAcco != null ? Math.round((hostPayout - fareAcco) * 100) / 100 : null;
+
+        // Détail voyageurs
+        const nb = res.numberOfGuests;
+        const adultes = nb?.numberOfAdults ?? null;
+        const enfants = nb?.numberOfChildren ?? null;
+        const bebes   = nb?.numberOfInfants  ?? null;
+
         allReservations.push({
           id,
           checkIn, checkOut, nights,
@@ -325,8 +330,11 @@ async function scrapeGuesty() {
           hostPayout,
           totalPaid,
           fareAcco,
+          platformFee,
           tpr,
-          guests: res.guests ?? res.guestsCount ?? null,
+          guests: res.guestsCount ?? null,
+          adultes, enfants, bebes,
+          confirmationCode: res.confirmationCode || null,
         });
       }
     }
@@ -417,7 +425,13 @@ async function sendEmail(prevReservations, allReservations, cancellationInfo = {
     for (const r of newRes) {
       const g = buildGCalLink(r);
       const prixNuitNew = r.ownerRevenue != null && r.nights ? " (" + (r.ownerRevenue/r.nights).toFixed(2) + " €/n)" : "";
-      html += `<li>🏠 <b>${fmtDate(r.checkIn)}</b> → <b>${fmtDate(r.checkOut)}</b> — ${r.nights||"?"}n — <b>${r.ownerRevenue != null ? r.ownerRevenue + " €" : "?"}${prixNuitNew}</b> — ${r.guests??'?'} voy. — ${r.source||"?"}`;
+      const guestsNewStr = [
+        r.adultes != null ? `${r.adultes} adulte${r.adultes>1?'s':''}` : null,
+        r.enfants ? `${r.enfants} enfant${r.enfants>1?'s':''}` : null,
+        r.bebes ? `${r.bebes} bébé${r.bebes>1?'s':''}` : null,
+      ].filter(Boolean).join(', ') || (r.guests != null ? `${r.guests} voy.` : '? voy.');
+      const hostPayoutStr = r.hostPayout != null ? ` | brut plateforme: ${r.hostPayout}€` : '';
+      html += `<li>🏠 <b>${fmtDate(r.checkIn)}</b> → <b>${fmtDate(r.checkOut)}</b> — ${r.nights||"?"}n — <b>${r.ownerRevenue != null ? r.ownerRevenue + " €" : "?"}${prixNuitNew}</b>${hostPayoutStr} — ${guestsNewStr} — ${r.source||"?"}`;
       if (g) html += ` &nbsp;<a href="${g}" style="background:#4285F4;color:white;padding:3px 10px;border-radius:4px;text-decoration:none;font-size:12px;">📅 Agenda</a>`;
       html += `</li>`;
     }
@@ -448,7 +462,7 @@ async function sendEmail(prevReservations, allReservations, cancellationInfo = {
 
   html += `<h3>📋 Toutes les réservations (${allReservations.length}) :</h3>`;
   html += `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:sans-serif;font-size:13px;">`;
-  html += `<tr style="background:#f0f0f0"><th>Arrivée</th><th>Départ</th><th>Nuits</th><th>Revenu propriétaire</th><th>€/nuit</th><th>Voyageurs</th><th>Plateforme</th><th>État</th><th>Agenda</th></tr>`;
+  html += `<tr style="background:#f0f0f0"><th>Arrivée</th><th>Départ</th><th>Nuits</th><th>Revenu net prop.</th><th>€/nuit</th><th>hostPayout</th><th>Frais plate.</th><th>Voyageurs</th><th>Plateforme</th><th>État</th><th>Agenda</th></tr>`;
 
   // Grouper par mois de check-in
   const MOIS_FR_LONG = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
@@ -486,11 +500,18 @@ async function sendEmail(prevReservations, allReservations, cancellationInfo = {
     const g = buildGCalLink(r);
     const ico = (r.status||"").toLowerCase().includes("cancel") ? "❌" : "✅";
     const prixNuit = r.ownerRevenue != null && r.nights ? (r.ownerRevenue / r.nights).toFixed(2) : "?";
+    const guestsStr = [
+      r.adultes != null ? `${r.adultes}A` : null,
+      r.enfants ? `${r.enfants}E` : null,
+      r.bebes ? `${r.bebes}B` : null,
+    ].filter(Boolean).join('+') || (r.guests != null ? `${r.guests}` : '?');
     html += `<tr${rowStyle}>`;
     html += `<td><b>${fmtDate(r.checkIn)}</b></td><td>${fmtDate(r.checkOut)}</td><td>${r.nights||"?"}</td>`;
     html += `<td><b>${r.ownerRevenue != null ? r.ownerRevenue + " €" : "?"}</b></td>`;
     html += `<td>${prixNuit !== "?" ? prixNuit + " €" : "?"}</td>`;
-    html += `<td>${r.guests??'?'}</td><td>${r.source||"?"}</td>`;
+    html += `<td style="color:#666">${r.hostPayout != null ? r.hostPayout + " €" : "?"}</td>`;
+    html += `<td style="color:#999;font-size:11px">${r.platformFee != null ? r.platformFee + " €" : "?"}</td>`;
+    html += `<td>${guestsStr}</td><td>${r.source||"?"}</td>`;
     html += `<td>${ico} ${r.status||"?"}</td>`;
     html += `<td>${g ? `<a href="${g}" style="background:#4285F4;color:white;padding:2px 8px;border-radius:4px;text-decoration:none;font-size:11px;">📅</a>` : ""}</td>`;
     html += `</tr>`;
