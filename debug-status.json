@@ -1,7 +1,7 @@
 {
-  "generatedAt": "2026-07-01T15:41:21.743Z",
+  "generatedAt": "2026-07-01T16:47:28.630Z",
   "blockRefsStatusCounts": {
-    "confirmed": 20
+    "confirmed": 21
   },
   "reservationsListCount": 0,
   "reservationsListStatusCounts": {},
@@ -11,18 +11,19 @@
     "https://app.guesty.com/api/owners/auth/portals/meta/mercijulie.guestyowners.com",
     "https://app.guesty.com/api/owners/auth/login",
     "https://app.guesty.com/api/owners/me",
-    "https://app.guesty.com/api/owners/me/listings",
     "https://app.guesty.com/api/owners/me/portals/all",
+    "https://app.guesty.com/api/owners/me/listings",
     "https://app.guesty.com/api/owners/me",
     "https://app.guesty.com/api/owners/me/announcements",
     "https://app.guesty.com/api/owners/me/reviews",
     "https://app.guesty.com/api/owners/auth/portals/meta/mercijulie.guestyowners.com",
     "https://app.guesty.com/api/owners/me",
+    "https://app.guesty.com/api/owners/me/portals/all",
     "https://app.guesty.com/api/owners/me/listings",
     "https://app.guesty.com/api/owners/me/tasks/future",
-    "https://app.guesty.com/api/booking-engine-management/engines/engines-by-listing-ids",
-    "https://app.guesty.com/api/owners/me/portals/all",
     "https://app.guesty.com/api/owners/me/tasks/past",
+    "https://app.guesty.com/api/booking-engine-management/engines/engines-by-listing-ids",
+    "https://app.guesty.com/api/owners/me/guests/retrieve-many",
     "https://app.guesty.com/api/owners/me/guests/retrieve-many",
     "https://app.guesty.com/api/owners/me/guests/retrieve-many"
   ]
