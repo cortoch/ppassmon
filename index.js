@@ -413,6 +413,12 @@ async function scrapeGuesty() {
       .filter(d => d.status === 'available' || d.status === 'booked')
       .reduce((sum, d) => sum + (d.price || 0), 0);
     console.log(`  📈 PriceLabs: ${nbJoursReserves}j réservés / ${nbJoursTotaux}j totaux | RevPAR possible (6m): ${revParPossible.toFixed(0)}€`);
+    // Logger tous les prix par date pour export
+    const priceDump = Object.entries(priceByDate)
+      .sort(([a],[b]) => a.localeCompare(b))
+      .map(([date, d]) => `${date}|${d.status}|${d.price}|${d.basePrice}|${d.minNights}`)
+      .join('\n');
+    console.log(`  💹 PRICELABS_DUMP_START\n${priceDump}\n  💹 PRICELABS_DUMP_END`);
 
     allReservations.sort((a, b) => (a.checkIn || "").localeCompare(b.checkIn || ""));
     console.log(`\n📊 Total : ${allReservations.length} réservation(s)`);
