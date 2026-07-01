@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-01T20:55:45.210Z",
+  "generatedAt": "2026-07-01T21:23:47.387Z",
   "blockRefsStatusCounts": {
     "confirmed": 21
   },
@@ -21,8 +21,8 @@
     "https://app.guesty.com/api/owners/me/portals/all",
     "https://app.guesty.com/api/owners/me/listings",
     "https://app.guesty.com/api/booking-engine-management/engines/engines-by-listing-ids",
-    "https://app.guesty.com/api/owners/me/tasks/past",
     "https://app.guesty.com/api/owners/me/tasks/future",
+    "https://app.guesty.com/api/owners/me/tasks/past",
     "https://app.guesty.com/api/owners/me/guests/retrieve-many",
     "https://app.guesty.com/api/owners/me/guests/retrieve-many",
     "https://app.guesty.com/api/owners/me/guests/retrieve-many"
