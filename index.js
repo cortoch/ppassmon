@@ -282,10 +282,23 @@ async function scrapeGuesty() {
         const sourceMap = { airbnb2: "Airbnb", airbnb: "Airbnb", "booking.com": "Booking.com", direct: "Direct" };
         const source = sourceMap[res.source] || res.source || null;
 
-        // Logger le JSON COMPLET de la première réservation pour analyse
+        // Logger les champs utiles de la première réservation
         if (!captured._loggedRes) {
-          console.log(`  🔬 res FULL: ${JSON.stringify(res)}`);
-          console.log(`  🔬 block FULL: ${JSON.stringify(block)}`);
+          console.log(`  🔬 keys: ${Object.keys(res).join(',')}`);
+          console.log(`  🔬 money: ${JSON.stringify(res.money)}`);
+          console.log(`  🔬 integration: ${JSON.stringify(res.integration)}`);
+          console.log(`  🔬 numberOfGuests: ${JSON.stringify(res.numberOfGuests)}`);
+          console.log(`  🔬 guestsCount: ${res.guestsCount}`);
+          console.log(`  🔬 expectedPayout: ${res.expectedPayoutAmount}`);
+          console.log(`  🔬 netIncome: ${res.netIncome}`);
+          console.log(`  🔬 ownerRevenue: ${res.ownerRevenue}`);
+          console.log(`  🔬 hostPayout: ${res.money?.hostPayout}`);
+          console.log(`  🔬 fareAcco: ${res.money?.fareAccommodationAdjusted}`);
+          console.log(`  🔬 cleaning: ${res.money?.cleaningFee ?? res.money?.cleaning ?? res.money?.fareCleaningFee ?? 'N/A'}`);
+          console.log(`  🔬 platformFee: ${res.money?.farePlatformFee ?? res.money?.platformFee ?? 'N/A'}`);
+          console.log(`  🔬 totalFees: ${JSON.stringify(res.money?.fees)}`);
+          console.log(`  🔬 block_money: ${JSON.stringify(block.reservation?.money)}`);
+          console.log(`  🔬 block_keys: ${Object.keys(block).join(',')}`);
           captured._loggedRes = true;
         }
 
