@@ -1,0 +1,24 @@
+{
+  "generatedAt": "2026-07-01T11:02:21.327Z",
+  "blockRefsStatusCounts": {
+    "confirmed": 21
+  },
+  "reservationsListCount": 0,
+  "reservationsListStatusCounts": {},
+  "reservationsListSample": null,
+  "otherUrlsSeen": [
+    "https://app.guesty.com/api/owners/auth/portals/meta/mercijulie.guestyowners.com",
+    "https://app.guesty.com/api/owners/auth/portals/meta/mercijulie.guestyowners.com",
+    "https://app.guesty.com/api/owners/auth/login",
+    "https://app.guesty.com/api/owners/me",
+    "https://app.guesty.com/api/owners/me/portals/all",
+    "https://app.guesty.com/api/owners/me/listings",
+    "https://app.guesty.com/api/owners/me",
+    "https://app.guesty.com/api/owners/me/announcements",
+    "https://app.guesty.com/api/owners/auth/portals/meta/mercijulie.guestyowners.com",
+    "https://app.guesty.com/api/owners/me",
+    "https://app.guesty.com/api/owners/me/listings",
+    "https://app.guesty.com/api/owners/me/portals/all",
+    "https://app.guesty.com/api/booking-engine-management/engines/engines-by-listing-ids"
+  ]
+}
