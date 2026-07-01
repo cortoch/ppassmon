@@ -431,7 +431,9 @@ async function sendEmail(prevReservations, allReservations, cancellationInfo = {
         r.bebes ? `${r.bebes} bébé${r.bebes>1?'s':''}` : null,
       ].filter(Boolean).join(', ') || (r.guests != null ? `${r.guests} voy.` : '? voy.');
       const hostPayoutStr = r.hostPayout != null ? ` | brut plateforme: ${r.hostPayout}€` : '';
-      html += `<li>🏠 <b>${fmtDate(r.checkIn)}</b> → <b>${fmtDate(r.checkOut)}</b> — ${r.nights||"?"}n — <b>${r.ownerRevenue != null ? r.ownerRevenue + " €" : "?"}${prixNuitNew}</b>${hostPayoutStr} — ${guestsNewStr} — ${r.source||"?"}`;
+      const alerteStr = r.ownerRevenue != null && r.nights && (r.ownerRevenue/r.nights) < 30 ? " <span style='color:#C00000'><b>⚠️ Prix/nuit très bas !</b></span>" : "";
+      const guestNameStr = r.guestName ? ` — <b>${r.guestName}</b>` : "";
+      html += `<li>🏠 <b>${fmtDate(r.checkIn)}</b> → <b>${fmtDate(r.checkOut)}</b>${guestNameStr} — ${r.nights||"?"}n — <b>${r.ownerRevenue != null ? r.ownerRevenue + " €" : "?"}${prixNuitNew}</b>${hostPayoutStr} — ${guestsNewStr} — ${r.source||"?"}${alerteStr}`;
       if (g) html += ` &nbsp;<a href="${g}" style="background:#4285F4;color:white;padding:3px 10px;border-radius:4px;text-decoration:none;font-size:12px;">📅 Agenda</a>`;
       html += `</li>`;
     }
@@ -462,7 +464,7 @@ async function sendEmail(prevReservations, allReservations, cancellationInfo = {
 
   html += `<h3>📋 Toutes les réservations (${allReservations.length}) :</h3>`;
   html += `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:sans-serif;font-size:13px;">`;
-  html += `<tr style="background:#f0f0f0"><th>Arrivée</th><th>Départ</th><th>Nuits</th><th>Revenu net prop.</th><th>€/nuit</th><th>hostPayout</th><th>Frais plate.</th><th>Voyageurs</th><th>Plateforme</th><th>État</th><th>Agenda</th></tr>`;
+  html += `<tr style="background:#f0f0f0"><th>Arrivée</th><th>Départ</th><th>Nuits</th><th>Voyageur</th><th>Revenu net prop.</th><th>€/nuit</th><th>hostPayout</th><th>Frais plate.</th><th>Voy.</th><th>Plateforme</th><th>État</th><th>Agenda</th></tr>`;
 
   // Grouper par mois de check-in
   const MOIS_FR_LONG = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
@@ -471,10 +473,10 @@ async function sendEmail(prevReservations, allReservations, cancellationInfo = {
 
   const flushMonth = () => {
     if (currentMonth !== null) {
-      html += `<tr style="background:#e8eaf6;font-weight:bold"><td colspan="3">📅 Sous-total ${currentMonth}</td>`;
+      html += `<tr style="background:#e8eaf6;font-weight:bold"><td colspan="4">📅 Sous-total ${currentMonth}</td>`;
       html += `<td>${monthRevenue > 0 ? monthRevenue.toFixed(2) + " €" : "?"}</td>`;
       html += `<td>${monthNights > 0 ? (monthRevenue/monthNights).toFixed(2) + " €/n" : "?"}</td>`;
-      html += `<td colspan="4"></td></tr>`;
+      html += `<td colspan="5"></td></tr>`;
     }
   };
 
@@ -488,7 +490,7 @@ async function sendEmail(prevReservations, allReservations, cancellationInfo = {
       monthRevenue = 0;
       monthNights = 0;
       // En-tête mois
-      html += `<tr style="background:#c5cae9"><td colspan="9" style="font-weight:bold;font-size:14px">📆 ${monthLabel}</td></tr>`;
+      html += `<tr style="background:#c5cae9"><td colspan="12" style="font-weight:bold;font-size:14px">📆 ${monthLabel}</td></tr>`;
     }
 
     if (r.ownerRevenue != null) { monthRevenue += parseFloat(r.ownerRevenue); }
@@ -505,10 +507,17 @@ async function sendEmail(prevReservations, allReservations, cancellationInfo = {
       r.enfants ? `${r.enfants}E` : null,
       r.bebes ? `${r.bebes}B` : null,
     ].filter(Boolean).join('+') || (r.guests != null ? `${r.guests}` : '?');
+    // Alerte prix/nuit bas
+    const prixNuitNum = r.ownerRevenue != null && r.nights ? r.ownerRevenue / r.nights : null;
+    const prixNuitAlert = prixNuitNum != null && prixNuitNum < 30;
+    const prixNuitStyle = prixNuitAlert ? ' style="color:#C00000;font-weight:bold"' : '';
+    const prixNuitDisplay = prixNuit !== "?" ? prixNuit + " €" + (prixNuitAlert ? " ⚠️" : "") : "?";
+
     html += `<tr${rowStyle}>`;
     html += `<td><b>${fmtDate(r.checkIn)}</b></td><td>${fmtDate(r.checkOut)}</td><td>${r.nights||"?"}</td>`;
+    html += `<td style="font-size:12px">${r.guestName || "?"}</td>`;
     html += `<td><b>${r.ownerRevenue != null ? r.ownerRevenue + " €" : "?"}</b></td>`;
-    html += `<td>${prixNuit !== "?" ? prixNuit + " €" : "?"}</td>`;
+    html += `<td${prixNuitStyle}>${prixNuitDisplay}</td>`;
     html += `<td style="color:#666">${r.hostPayout != null ? r.hostPayout + " €" : "?"}</td>`;
     html += `<td style="color:#999;font-size:11px">${r.platformFee != null ? r.platformFee + " €" : "?"}</td>`;
     html += `<td>${guestsStr}</td><td>${r.source||"?"}</td>`;
@@ -523,8 +532,8 @@ async function sendEmail(prevReservations, allReservations, cancellationInfo = {
   html += `<p><a href="${PORTAL_URL}/my-properties/${LISTING_ID}/calendar">👉 Calendrier Guesty</a></p>`;
 
   const subject = newRes.length > 0
-    ? `🆕 Nouvelle réservation${newRes.length > 1 ? "s" : ""} : ${fmtDate(newRes[0].checkIn)} → ${fmtDate(newRes[0].checkOut)}`
-    : removedRes.length > 0 ? `❌ Réservation annulée : ${fmtDate(removedRes[0].checkIn)} → ${fmtDate(removedRes[0].checkOut)}`
+    ? `🆕 ${newRes[0].guestName || "Nouvelle réservation"} : ${fmtDate(newRes[0].checkIn)} → ${fmtDate(newRes[0].checkOut)} (${newRes[0].nights}n)`
+    : removedRes.length > 0 ? `❌ Annulé : ${removedRes[0].guestName || fmtDate(removedRes[0].checkIn)} → ${fmtDate(removedRes[0].checkOut)}`
     : `🔔 Guesty - Modification détectée`;
 
   const transporter = nodemailer.createTransport({ service: "gmail", auth: { user: EMAIL_FROM, pass: EMAIL_PASSWORD } });
