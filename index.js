@@ -312,7 +312,7 @@ async function scrapeGuesty() {
         // Frais plateforme estimés (~12% Airbnb, ~18% Booking selon données observées)
         // hostPayout = fareAcco + frais_plateforme
         // fareAcco = nuitées nettes (sans frais)
-        const platformFeeRate = src === "Booking.com" ? 0.18 : 0.12; // ~18% Booking, ~12% Airbnb
+        const platformFeeRate = source === "Booking.com" ? 0.18 : 0.12; // ~18% Booking, ~12% Airbnb
         const platformFee = fareAcco != null ? Math.round((hostPayout - fareAcco) * 100) / 100 : null;
 
         // Détail voyageurs
