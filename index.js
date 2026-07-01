@@ -85,6 +85,15 @@ async function scrapeGuesty() {
           captured.calendar = body;
         } else if (url.includes("/owners/me/reservations") || url.includes("/v2/reservations")) {
           captured.reservations = body;
+          const list = Array.isArray(body) ? body : (body.results || body.data || body.reservations || []);
+          if (Array.isArray(list) && list.length > 0) {
+            if (!captured.reservationsList) captured.reservationsList = [];
+            captured.reservationsList.push(...list);
+            if (!captured._loggedReservationsList) {
+              console.log(`  🔬 reservations-list sample: ${JSON.stringify(list[0]).substring(0, 800)}`);
+              captured._loggedReservationsList = true;
+            }
+          }
         } else if (url.includes("revenue-analytics") && Array.isArray(body) && body[0]?.reservationId) {
           if (!captured.revenueItems) captured.revenueItems = [];
           captured.revenueItems.push(...body);
@@ -307,6 +316,34 @@ async function scrapeGuesty() {
     }
     console.log(`  🏨 ${allReservations.length} réservation(s) depuis blockRefs`);
 
+    // Map id -> infos d'annulation, construite depuis l'endpoint reservations-list
+    // (qui contient potentiellement les résas annulées, contrairement à blockRefs
+    // où le bloc disparaît complètement du calendrier une fois annulé)
+    const cancellationInfo = {};
+    const reservationsList = captured.reservationsList || [];
+    console.log(`  📋 ${reservationsList.length} entrée(s) dans reservations-list`);
+    if (reservationsList.length > 0) {
+      const statusCounts = {};
+      for (const it of reservationsList) {
+        const st = it.status || "?";
+        statusCounts[st] = (statusCounts[st] || 0) + 1;
+      }
+      console.log(`  📊 Distribution status (reservations-list): ${JSON.stringify(statusCounts)}`);
+    }
+    for (const it of reservationsList) {
+      const id = it._id || it.id || it.reservationId;
+      if (!id) continue;
+      const reason = it.cancellationReason || it.cancelReason
+        || it.cancellation?.reason || it.cancellation?.note
+        || it.cancellationNote || it.cancelledBy || it.canceledBy
+        || null;
+      cancellationInfo[id] = {
+        status: it.status || null,
+        reason,
+        cancelledAt: it.cancelledAt || it.canceledAt || it.cancellation?.date || null,
+      };
+    }
+
     allReservations.sort((a, b) => (a.checkIn || "").localeCompare(b.checkIn || ""));
     console.log(`\n📊 Total : ${allReservations.length} réservation(s)`);
     allReservations.forEach(r => {
@@ -314,7 +351,7 @@ async function scrapeGuesty() {
       const tprStr = r.tpr != null ? ` | TPR=${r.tpr}%` : "";
       console.log(`  🏨 ${r.checkIn} → ${r.checkOut} | ${r.nights}n | host=${r.hostPayout??'?'}€ owner=${r.ownerRevenue??'?'}€${tprStr} | ${r.guests??'?'} voy. | ${r.guestName||'?'} | ${r.source || "?"}`);
     });
-    return allReservations;
+    return { reservations: allReservations, cancellationInfo };
 
   } finally {
     await browser.close();
@@ -322,7 +359,7 @@ async function scrapeGuesty() {
 }
 
 // ─── ENVOI EMAIL ──────────────────────────────────────────────────────────────
-async function sendEmail(prevReservations, allReservations) {
+async function sendEmail(prevReservations, allReservations, cancellationInfo = {}) {
   const prevKeys    = new Set(prevReservations.map(r => r.id));
   const currentKeys = new Set(allReservations.map(r => r.id));
   const newRes      = allReservations.filter(r => !prevKeys.has(r.id));
@@ -357,7 +394,19 @@ async function sendEmail(prevReservations, allReservations) {
   }
   if (removedRes.length > 0) {
     html += `<h3>❌ Réservations annulées :</h3><ul>`;
-    for (const r of removedRes) html += `<li>📅 <b>${fmtDate(r.checkIn)}</b> → <b>${fmtDate(r.checkOut)}</b>${r.guestName ? ` — ${r.guestName}` : ""}</li>`;
+    for (const r of removedRes) {
+      const info = cancellationInfo[r.id];
+      let extra = "";
+      if (info && (info.status || info.reason)) {
+        const parts = [];
+        if (info.status) parts.push(`statut: ${info.status}`);
+        if (info.reason) parts.push(`raison: ${info.reason}`);
+        extra = ` <i>(${parts.join(", ")})</i>`;
+      } else {
+        extra = ` <i>(raison non disponible via l'API)</i>`;
+      }
+      html += `<li>📅 <b>${fmtDate(r.checkIn)}</b> → <b>${fmtDate(r.checkOut)}</b>${r.guestName ? ` — ${r.guestName}` : ""}${extra}</li>`;
+    }
     html += `</ul>`;
   }
   if (modifiedRes.length > 0) {
@@ -435,19 +484,19 @@ async function sendEmail(prevReservations, allReservations) {
 async function main() {
   console.log(`🚀 Guesty Monitor — ${new Date().toLocaleString("fr-FR")}`);
   try {
-    const allReservations = await scrapeGuesty();
+    const { reservations: allReservations, cancellationInfo } = await scrapeGuesty();
     const state = loadState();
     const currentHash = hash(JSON.stringify(allReservations));
     if ("guesty" in state) {
       if (state.guesty.hash !== currentHash) {
         console.log("🔄 Changement détecté");
-        await sendEmail(state.guesty.reservations || [], allReservations);
+        await sendEmail(state.guesty.reservations || [], allReservations, cancellationInfo);
       } else {
         console.log("✅ Aucun changement");
       }
     } else {
       console.log("🆕 Première observation");
-      await sendEmail([], allReservations);
+      await sendEmail([], allReservations, cancellationInfo);
     }
     saveState({ guesty: { hash: currentHash, reservations: allReservations } });
     console.log("💾 État sauvegardé");
