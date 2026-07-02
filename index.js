@@ -321,6 +321,26 @@ async function scrapeGuesty() {
         // Nom voyageur (disponible dans res.guest.fullName)
         const guestName = res.guest?.fullName || null;
 
+        // Animaux : investiguer guestStay, browserCheckIn, earlyCheckIn
+        if (!captured._loggedGuestStay && guestName) {
+          console.log(`  🐾 guestStay: ${JSON.stringify(res.guestStay)}`);
+          console.log(`  🐾 browserCheckIn: ${JSON.stringify(res.browserCheckIn)}`);
+          console.log(`  🐾 earlyCheckIn: ${JSON.stringify(res.earlyCheckIn)}`);
+          console.log(`  🐾 lateCheckOut: ${JSON.stringify(res.lateCheckOut)}`);
+          console.log(`  🐾 guest full: ${JSON.stringify(res.guest)}`);
+          console.log(`  🐾 plannedArrival: ${JSON.stringify(res.plannedArrival)}`);
+          console.log(`  🐾 staysMeta: ${JSON.stringify(res.staysMeta)}`);
+          console.log(`  🐾 integration keys: ${res.integration ? Object.keys(res.integration).join(',') : 'null'}`);
+          // Chercher "pet" ou "animal" dans tous les champs
+          const resStr = JSON.stringify(res).toLowerCase();
+          const petIdx = resStr.indexOf('pet');
+          const animalIdx = resStr.indexOf('animal');
+          const dogIdx = resStr.indexOf('dog');
+          console.log(`  🐾 Occurrences: pet@${petIdx} animal@${animalIdx} dog@${dogIdx}`);
+          if (petIdx > 0) console.log(`  🐾 Contexte pet: ${resStr.substring(Math.max(0,petIdx-20), petIdx+50)}`);
+          captured._loggedGuestStay = true;
+        }
+
         // Prix PriceLabs du jour de check-in (depuis calendarDays)
         const priceDayData = (captured.calendarDays || []).find(d => d.date === checkIn);
         const priceLabsCheckIn = priceDayData?.price ?? null;
